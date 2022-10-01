@@ -26,6 +26,7 @@ type Repository struct {
 	Language    string
 	Is_private  bool
 	Has_issues  bool
+	Has_wiki    bool
 	Mainbranch  RepositoryBranch
 	Type        string
 	CreatedOn   string `mapstructure:"created_on"`
@@ -119,9 +120,7 @@ type PipelineVariable struct {
 
 type PipelineKeyPair struct {
 	Type       string
-	Uuid       string
-	PublicKey  string
-	PrivateKey string
+	Public_key string
 }
 
 type PipelineBuildNumber struct {
@@ -203,6 +202,51 @@ type DefaultReviewers struct {
 	Size             int
 	Next             string
 	DefaultReviewers []DefaultReviewer
+}
+
+type Group struct {
+	AccountPrivilege        string `mapstructure:"account_privilege"`
+	DefaultPermission       string `mapstructure:"default_permission"`
+	EmailForwardingDisabled bool   `mapstructure:"email_forwarding_disabled"`
+	FullSlug                string `mapstructure:"full_slug"`
+	Links                   map[string]map[string]string
+	Name                    string                 `mapstructure:"name"`
+	Slug                    string                 `mapstructure:"slug"`
+	Type                    string                 `mapstructure:"type"`
+	Workspace               map[string]interface{} `mapstructure:"workspace"`
+	Owner                   map[string]interface{}
+}
+
+type GroupPermission struct {
+	Type       string
+	Group      Group
+	Permission string
+	Links      map[string]map[string]string
+}
+
+type GroupPermissions struct {
+	Page             int
+	Pagelen          int
+	MaxDepth         int
+	Size             int
+	Next             string
+	GroupPermissions []GroupPermission
+}
+
+type UserPermission struct {
+	Type       string
+	User       User
+	Permission string
+	Links      map[string]map[string]string
+}
+
+type UserPermissions struct {
+	Page            int
+	Pagelen         int
+	MaxDepth        int
+	Size            int
+	Next            string
+	UserPermissions []UserPermission
 }
 
 func (r *Repository) Create(ro *RepositoryOptions) (*Repository, error) {
@@ -680,6 +724,17 @@ func (r *Repository) UpdatePipelineVariable(opt *RepositoryPipelineVariableOptio
 	return decodePipelineVariableRepository(response)
 }
 
+func (r *Repository) GetPipelineKeyPair(rpkpo *RepositoryPipelineKeyPairOptions) (*PipelineKeyPair, error) {
+	urlStr := r.c.requestUrl("/repositories/%s/%s/pipelines_config/ssh/key_pair", rpkpo.Owner, rpkpo.RepoSlug)
+
+	response, err := r.c.execute("GET", urlStr, "")
+	if err != nil {
+		return nil, err
+	}
+
+	return decodePipelineKeyPairRepository(response)
+}
+
 func (r *Repository) AddPipelineKeyPair(rpkpo *RepositoryPipelineKeyPairOptions) (*PipelineKeyPair, error) {
 	data, err := r.buildPipelineKeyPairBody(rpkpo)
 	if err != nil {
@@ -693,6 +748,11 @@ func (r *Repository) AddPipelineKeyPair(rpkpo *RepositoryPipelineKeyPairOptions)
 	}
 
 	return decodePipelineKeyPairRepository(response)
+}
+
+func (r *Repository) DeletePipelineKeyPair(rpkpo *RepositoryPipelineKeyPairOptions) (interface{}, error) {
+	urlStr := r.c.requestUrl("/repositories/%s/%s/pipelines_config/ssh/key_pair", rpkpo.Owner, rpkpo.RepoSlug)
+	return r.c.execute("DELETE", urlStr, "")
 }
 
 func (r *Repository) UpdatePipelineBuildNumber(rpbno *RepositoryPipelineBuildNumberOptions) (*PipelineBuildNumber, error) {
@@ -832,6 +892,88 @@ func (r *Repository) UpdateDeploymentVariable(opt *RepositoryDeploymentVariableO
 	}
 
 	return decodeDeploymentVariable(response)
+}
+
+func (r *Repository) ListGroupPermissions(ro *RepositoryOptions) (*GroupPermissions, error) {
+	urlStr := r.c.requestUrl("/repositories/%s/%s/permissions-config/groups?pagelen=1", ro.Owner, ro.RepoSlug)
+
+	res, err := r.c.executePaginated("GET", urlStr, "")
+	if err != nil {
+		return nil, err
+	}
+	return decodeGroupsPermissions(res)
+}
+
+func (r *Repository) SetGroupPermissions(rgo *RepositoryGroupPermissionsOptions) (*GroupPermission, error) {
+	body, err := r.buildRepositoryGroupPermissionBody(rgo)
+	if err != nil {
+		return nil, err
+	}
+
+	urlStr := r.c.requestUrl("/repositories/%s/%s/permissions-config/groups/%s", rgo.Owner, rgo.RepoSlug, rgo.Group)
+
+	res, err := r.c.execute("PUT", urlStr, body)
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeGroupPermissions(res)
+}
+
+func (r *Repository) DeleteGroupPermissions(rgo *RepositoryGroupPermissionsOptions) (interface{}, error) {
+	urlStr := r.c.requestUrl("/repositories/%s/%s/permissions-config/groups/%s", rgo.Owner, rgo.RepoSlug, rgo.Group)
+	return r.c.execute("DELETE", urlStr, "")
+}
+
+func (r *Repository) GetGroupPermissions(rgo *RepositoryGroupPermissionsOptions) (*GroupPermission, error) {
+	urlStr := r.c.requestUrl("/repositories/%s/%s/permissions-config/groups/%s", rgo.Owner, rgo.RepoSlug, rgo.Group)
+
+	res, err := r.c.executePaginated("GET", urlStr, "")
+	if err != nil {
+		return nil, err
+	}
+	return decodeGroupPermissions(res)
+}
+
+func (r *Repository) ListUserPermissions(ro *RepositoryOptions) (*UserPermissions, error) {
+	urlStr := r.c.requestUrl("/repositories/%s/%s/permissions-config/users?pagelen=1", ro.Owner, ro.RepoSlug)
+
+	res, err := r.c.executePaginated("GET", urlStr, "")
+	if err != nil {
+		return nil, err
+	}
+	return decodeUsersPermissions(res)
+}
+
+func (r *Repository) SetUserPermissions(rgo *RepositoryUserPermissionsOptions) (*UserPermission, error) {
+	body, err := r.buildRepositoryUserPermissionBody(rgo)
+	if err != nil {
+		return nil, err
+	}
+
+	urlStr := r.c.requestUrl("/repositories/%s/%s/permissions-config/users/%s", rgo.Owner, rgo.RepoSlug, rgo.User)
+
+	res, err := r.c.execute("PUT", urlStr, body)
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeUserPermissions(res)
+}
+
+func (r *Repository) DeleteUserPermissions(rgo *RepositoryUserPermissionsOptions) (interface{}, error) {
+	urlStr := r.c.requestUrl("/repositories/%s/%s/permissions-config/users/%s", rgo.Owner, rgo.RepoSlug, rgo.User)
+	return r.c.execute("DELETE", urlStr, "")
+}
+
+func (r *Repository) GetUserPermissions(rgo *RepositoryUserPermissionsOptions) (*UserPermission, error) {
+	urlStr := r.c.requestUrl("/repositories/%s/%s/permissions-config/users/%s", rgo.Owner, rgo.RepoSlug, rgo.User)
+
+	res, err := r.c.executePaginated("GET", urlStr, "")
+	if err != nil {
+		return nil, err
+	}
+	return decodeUserPermissions(res)
 }
 
 func (r *Repository) buildRepositoryBody(ro *RepositoryOptions) (string, error) {
@@ -1015,6 +1157,22 @@ func (r *Repository) buildDeploymentVariableBody(opt *RepositoryDeploymentVariab
 	body["key"] = opt.Key
 	body["value"] = opt.Value
 	body["secured"] = opt.Secured
+
+	return r.buildJsonBody(body)
+}
+
+func (r *Repository) buildRepositoryGroupPermissionBody(rpo *RepositoryGroupPermissionsOptions) (string, error) {
+	body := map[string]interface{}{}
+
+	body["permission"] = rpo.Permission
+
+	return r.buildJsonBody(body)
+}
+
+func (r *Repository) buildRepositoryUserPermissionBody(rpo *RepositoryUserPermissionsOptions) (string, error) {
+	body := map[string]interface{}{}
+
+	body["permission"] = rpo.Permission
 
 	return r.buildJsonBody(body)
 }
@@ -1392,7 +1550,7 @@ func decodeEnvironments(response string) (*Environments, error) {
 			if errs == nil {
 				errs = err
 			} else {
-				errs = fmt.Errorf("%w; environment %d: %w", errs, idx, err)
+				errs = fmt.Errorf("%w; environment %d: %v", errs, idx, err)
 			}
 		} else {
 			environmentsArray = append(environmentsArray, environment)
@@ -1469,7 +1627,7 @@ func decodeDeploymentVariables(response string) (*DeploymentVariables, error) {
 			if errs == nil {
 				errs = err
 			} else {
-				errs = fmt.Errorf("%w; deployment variable %d: %w", errs, idx, err)
+				errs = fmt.Errorf("%w; deployment variable %d: %v", errs, idx, err)
 			}
 		} else {
 			variablesArray = append(variablesArray, variable)
@@ -1590,4 +1748,116 @@ func decodeDefaultReviewers(response interface{}) (*DefaultReviewers, error) {
 		DefaultReviewers: variables,
 	}
 	return &defaultReviewerVariables, nil
+}
+
+func decodeGroupPermissions(response interface{}) (*GroupPermission, error) {
+	var groupPermission GroupPermission
+	err := mapstructure.Decode(response, &groupPermission)
+	if err != nil {
+		return nil, err
+	}
+	return &groupPermission, nil
+}
+
+func decodeGroupsPermissions(response interface{}) (*GroupPermissions, error) {
+	responseMap := response.(map[string]interface{})
+	values := responseMap["values"].([]interface{})
+
+	var variables []GroupPermission
+	for _, variable := range values {
+		var groupPermission GroupPermission
+		err := mapstructure.Decode(variable, &groupPermission)
+		if err == nil {
+			variables = append(variables, groupPermission)
+		}
+	}
+
+	page, ok := responseMap["page"].(float64)
+	if !ok {
+		page = 0
+	}
+
+	pagelen, ok := responseMap["pagelen"].(float64)
+	if !ok {
+		pagelen = 0
+	}
+	max_depth, ok := responseMap["max_depth"].(float64)
+	if !ok {
+		max_depth = 0
+	}
+	size, ok := responseMap["size"].(float64)
+	if !ok {
+		size = 0
+	}
+
+	next, ok := responseMap["next"].(string)
+	if !ok {
+		next = ""
+	}
+
+	groupPermissions := GroupPermissions{
+		Page:             int(page),
+		Pagelen:          int(pagelen),
+		MaxDepth:         int(max_depth),
+		Size:             int(size),
+		Next:             next,
+		GroupPermissions: variables,
+	}
+	return &groupPermissions, nil
+}
+
+func decodeUserPermissions(response interface{}) (*UserPermission, error) {
+	var userPermission UserPermission
+	err := mapstructure.Decode(response, &userPermission)
+	if err != nil {
+		return nil, err
+	}
+	return &userPermission, nil
+}
+
+func decodeUsersPermissions(response interface{}) (*UserPermissions, error) {
+	responseMap := response.(map[string]interface{})
+	values := responseMap["values"].([]interface{})
+
+	var variables []UserPermission
+	for _, variable := range values {
+		var userPermission UserPermission
+		err := mapstructure.Decode(variable, &userPermission)
+		if err == nil {
+			variables = append(variables, userPermission)
+		}
+	}
+
+	page, ok := responseMap["page"].(float64)
+	if !ok {
+		page = 0
+	}
+
+	pagelen, ok := responseMap["pagelen"].(float64)
+	if !ok {
+		pagelen = 0
+	}
+	max_depth, ok := responseMap["max_depth"].(float64)
+	if !ok {
+		max_depth = 0
+	}
+	size, ok := responseMap["size"].(float64)
+	if !ok {
+		size = 0
+	}
+
+	next, ok := responseMap["next"].(string)
+	if !ok {
+		next = ""
+	}
+
+	userPermissions := UserPermissions{
+		Page:            int(page),
+		Pagelen:         int(pagelen),
+		MaxDepth:        int(max_depth),
+		Size:            int(size),
+		Next:            next,
+		UserPermissions: variables,
+	}
+	return &userPermissions, nil
 }
