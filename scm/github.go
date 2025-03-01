@@ -3,18 +3,21 @@ package scm
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
-	"github.com/gabrie30/ghorg/colorlog"
-	"github.com/google/go-github/v41/github"
+	"github.com/bradleyfalzon/ghinstallation/v2"
+	"github.com/google/go-github/v62/github"
 	"golang.org/x/oauth2"
 )
 
 var (
-	_            Client = Github{}
-	reposPerPage        = 100
+	_             Client = Github{}
+	reposPerPage         = 100
+	tokenUsername        = ""
 )
 
 func init() {
@@ -40,10 +43,14 @@ func (c Github) GetOrgRepos(targetOrg string) ([]Repo, error) {
 		ListOptions: github.ListOptions{PerPage: c.perPage},
 	}
 
+	c.SetTokensUsername()
+
+	spinningSpinner.Start()
+	defer spinningSpinner.Stop()
+
 	// get all pages of results
 	var allRepos []*github.Repository
 	for {
-		pageToPrintMoreInfo := 10
 		repos, resp, err := c.Repositories.ListByOrg(context.Background(), targetOrg, opt)
 
 		if err != nil {
@@ -51,21 +58,9 @@ func (c Github) GetOrgRepos(targetOrg string) ([]Repo, error) {
 		}
 		allRepos = append(allRepos, repos...)
 		if resp.NextPage == 0 {
-			// formatting for "Everything is okay, the org just has a lot of repos..."
-			if opt.Page >= pageToPrintMoreInfo {
-				fmt.Println("")
-			}
-
 			break
 		}
 
-		if opt.Page == pageToPrintMoreInfo {
-			fmt.Println("")
-		}
-
-		if opt.Page%pageToPrintMoreInfo == 0 && opt.Page != 0 {
-			colorlog.PrintSubtleInfo("Everything is okay, the org just has a lot of repos...")
-		}
 		opt.Page = resp.NextPage
 	}
 
@@ -74,40 +69,50 @@ func (c Github) GetOrgRepos(targetOrg string) ([]Repo, error) {
 
 // GetUserRepos gets user repos
 func (c Github) GetUserRepos(targetUser string) ([]Repo, error) {
-
-	userToken, _, _ := c.Users.Get(context.Background(), "")
-
-	if targetUser == userToken.GetLogin() {
-		colorlog.PrintSubtleInfo("\nCloning all your public/private repos. This process may take a bit longer than other clones, please be patient...")
-		targetUser = ""
-	}
-
 	if os.Getenv("GHORG_SCM_BASE_URL") != "" {
 		c.BaseURL, _ = url.Parse(os.Getenv("GHORG_SCM_BASE_URL"))
 	}
 
-	opt := &github.RepositoryListOptions{
-		Visibility:  "all",
-		ListOptions: github.ListOptions{PerPage: c.perPage},
-	}
+	c.SetTokensUsername()
+
+	spinningSpinner.Start()
+	defer spinningSpinner.Stop()
 
 	// get all pages of results
 	var allRepos []*github.Repository
+	opt := &github.ListOptions{PerPage: c.perPage, Page: 1}
 
 	for {
+		var repos []*github.Repository
+		var resp *github.Response
+		var err error
 
-		// List the repositories for a user. Passing the empty string will list repositories for the authenticated user.
-		repos, resp, err := c.Repositories.List(context.Background(), targetUser, opt)
+		if targetUser == tokenUsername {
+
+			authOpt := &github.RepositoryListByAuthenticatedUserOptions{
+				Type:        os.Getenv("GHORG_GITHUB_USER_OPTION"),
+				ListOptions: *opt,
+			}
+			// List repositories for the authenticated user
+			repos, resp, err = c.Repositories.ListByAuthenticatedUser(context.Background(), authOpt)
+		} else {
+			userOpt := &github.RepositoryListByUserOptions{
+				Type:        os.Getenv("GHORG_GITHUB_USER_OPTION"),
+				ListOptions: *opt,
+			}
+			// List repositories for the specified user
+			repos, resp, err = c.Repositories.ListByUser(context.Background(), targetUser, userOpt)
+		}
 
 		if err != nil {
 			return nil, err
 		}
 
-		if targetUser == "" {
+		if targetUser != tokenUsername {
 			userRepos := []*github.Repository{}
 
 			for _, repo := range repos {
-				if *repo.Owner.Type == "User" {
+				if repo.Owner != nil && repo.Owner.Type != nil && *repo.Owner.Type == "User" {
 					userRepos = append(userRepos, repo)
 				}
 			}
@@ -128,28 +133,68 @@ func (c Github) GetUserRepos(targetUser string) ([]Repo, error) {
 // NewClient create new github scm client
 func (_ Github) NewClient() (Client, error) {
 	ctx := context.Background()
-	ts := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: os.Getenv("GHORG_GITHUB_TOKEN")},
-	)
-	tc := oauth2.NewClient(ctx, ts)
+	var tc *http.Client
 
-	baseURL := os.Getenv("GHORG_SCM_BASE_URL")
-	var c *github.Client
-
-	if baseURL != "" {
-		c, _ = github.NewEnterpriseClient(baseURL, baseURL, tc)
-	} else {
-		c = github.NewClient(tc)
+	if os.Getenv("GHORG_GITHUB_TOKEN") != "" {
+		ts := oauth2.StaticTokenSource(
+			&oauth2.Token{AccessToken: os.Getenv("GHORG_GITHUB_TOKEN")},
+		)
+		tc = oauth2.NewClient(ctx, ts)
 	}
 
-	client := Github{Client: c, perPage: reposPerPage}
+	// Authenticate as a GitHub App
+	// If the user has set GHORG_GITHUB_APP_PEM_PATH, we assume they want to use a GitHub App
+	if os.Getenv("GHORG_GITHUB_APP_PEM_PATH") != "" {
+		// If the user has set GHORG_GITHUB_APP_INSTALLATION_ID, we assume they want to use a GitHub App
+		installID, err := strconv.ParseInt(os.Getenv("GHORG_GITHUB_APP_INSTALLATION_ID"), 10, 64)
+
+		if err != nil {
+			return nil, fmt.Errorf("GHORG_GITHUB_APP_INSTALLATION_ID must be set if GHORG_GITHUB_APP_PEM_PATH is set")
+		}
+
+		appID, err := strconv.ParseInt(os.Getenv("GHORG_GITHUB_APP_ID"), 10, 64)
+
+		if err != nil {
+			return nil, fmt.Errorf("GHORG_GITHUB_APP_ID must be set if GHORG_GITHUB_APP_PEM_PATH is set")
+		}
+
+		itr, err := ghinstallation.NewKeyFromFile(
+			http.DefaultTransport,
+			appID,
+			installID,
+			os.Getenv("GHORG_GITHUB_APP_PEM_PATH"),
+		)
+		if err != nil {
+			return nil, err
+		}
+		tc = &http.Client{Transport: itr}
+		// get the token from the itr and update the GHORT_GITHUB_TOKEN env var
+		token, err := itr.Token(ctx)
+
+		if err != nil {
+			return nil, err
+		}
+		os.Setenv("GHORG_GITHUB_TOKEN", token)
+	}
+
+	baseURL := os.Getenv("GHORG_SCM_BASE_URL")
+	var ghClient *github.Client
+
+	if baseURL != "" {
+		ghClient = github.NewClient(tc)
+		ghClient, _ = ghClient.WithEnterpriseURLs(baseURL, baseURL)
+	} else {
+		ghClient = github.NewClient(tc)
+	}
+
+	client := Github{Client: ghClient, perPage: reposPerPage}
 
 	return client, nil
 }
 
 func (_ Github) addTokenToHTTPSCloneURL(url string, token string) string {
 	splitURL := strings.Split(url, "https://")
-	return "https://" + token + "@" + splitURL[1]
+	return "https://" + tokenUsername + ":" + token + "@" + splitURL[1]
 }
 
 func (c Github) filter(allRepos []*github.Repository) []Repo {
@@ -173,6 +218,26 @@ func (c Github) filter(allRepos []*github.Repository) []Repo {
 			continue
 		}
 
+		// NOTE: for some reason forks do not always have a language field set so sometimes they get filtered out
+		if os.Getenv("GHORG_GITHUB_FILTER_LANGUAGE") != "" {
+			if ghRepo.Language != nil {
+				ghLang := strings.ToLower(*ghRepo.Language)
+				userLangs := strings.Split(strings.ToLower(os.Getenv("GHORG_GITHUB_FILTER_LANGUAGE")), ",")
+				matched := false
+				for _, userLang := range userLangs {
+					if ghLang == userLang {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			} else {
+				continue
+			}
+		}
+
 		r := Repo{}
 
 		r.Name = *ghRepo.Name
@@ -188,7 +253,7 @@ func (c Github) filter(allRepos []*github.Repository) []Repo {
 			r.CloneBranch = os.Getenv("GHORG_BRANCH")
 		}
 
-		if os.Getenv("GHORG_CLONE_PROTOCOL") == "https" {
+		if os.Getenv("GHORG_CLONE_PROTOCOL") == "https" || os.Getenv("GHORG_GITHUB_APP_PEM_PATH") != "" {
 			r.CloneURL = c.addTokenToHTTPSCloneURL(*ghRepo.CloneURL, os.Getenv("GHORG_GITHUB_TOKEN"))
 			r.URL = *ghRepo.CloneURL
 			repoData = append(repoData, r)
@@ -210,4 +275,16 @@ func (c Github) filter(allRepos []*github.Repository) []Repo {
 	}
 
 	return repoData
+}
+
+// Sets the GitHub username tied to the github token to the package variable tokenUsername
+// Then if https clone method is used the clone url will be https://username:token@github.com/org/repo.git
+// The username is now needed when using the new fine-grained tokens for github
+func (c Github) SetTokensUsername() {
+	if os.Getenv("GHORG_GITHUB_TOKEN_FROM_GITHUB_APP") == "true" || os.Getenv("GHORG_GITHUB_APP_PEM_PATH") != "" {
+		tokenUsername = "x-access-token"
+		return
+	}
+	userToken, _, _ := c.Users.Get(context.Background(), "")
+	tokenUsername = userToken.GetLogin()
 }

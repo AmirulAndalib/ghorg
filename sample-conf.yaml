@@ -40,6 +40,12 @@ GHORG_SCM_BASE_URL:
 # flag (--include-submodules)
 GHORG_INCLUDE_SUBMODULES: false
 
+# Appends the scm cloud hostname to the GHORG_ABSOLUTE_PATH_TO_CLONE_TO
+# This will organize your clones into specific folders by the scm provider.
+# e.g. GHORG_ABSOLUTE_PATH_TO_CLONE_TO/github.com/kuberentes")
+# flag (--preserve-scm-hostname)
+GHORG_PRESERVE_SCM_HOSTNAME: false
+
 # Allows you to pass arguments to git's filter flag e.g. git clone --filter=<args> this requires git version 2.19 or greater.
 # Useful for filtering out binary objects from repos
 # Few caveats, only works on inital clones, however if done on inital clone all subsequent clones will also honor the settings.
@@ -56,8 +62,19 @@ GHORG_PRUNE: false
 # flag (--prune-no-confirm)
 GHORG_PRUNE_NO_CONFIRM: false
 
+# Prune repositories that are considered untouched. A repository is considered untouched if there are:
+# 1. No new branches or zero branches
+# 2. No new commits
+# 3. No modified changes
+# flag (--prune-untouched)
+GHORG_PRUNE_UNTOUCHED: false
+
+# Automatically delete repos without showing an interactive confirmation prompt.
+# flag (--prune-untouched-no-confirm)
+GHORG_PRUNE_UNTOUCHED_NO_CONFIRM: false
+
 # Color output (enabled, disabled)
-# flag (--color) eg: --color=disabled
+# flag( --color) eg: --color=enabled eg: --color=disabled
 GHORG_COLOR: disabled
 
 # Skip archived repos, currently github/gitlab/gitea only
@@ -73,8 +90,18 @@ GHORG_SKIP_FORKS: false
 GHORG_BACKUP: false
 
 # Max goroutines created while cloning
-# flag (--concurrency)
+# flag (--concurrency) eg: --concurrency=1
 GHORG_CONCURRENCY: 25
+
+# Create a shallow clone with a history truncated to the specified number of commits
+# https://git-scm.com/docs/git-clone#Documentation/git-clone.txt---depthltdepthgt
+# flag (--clone-depth) eg: --clone-depth=1
+GHORG_CLONE_DEPTH:
+
+# Path to file with list of repo names to clone, file should contain one repo name per line
+# This allows you to only clone a specific list of repos
+# flag (--target-repos-path)
+GHORG_TARGET_REPOS_PATH:
 
 # A comma separated list of topics to filter by, currently github/gitlab/gitea only
 # flag (--topics) eg: --topics=frontend
@@ -137,26 +164,76 @@ GHORG_EXIT_CODE_ON_CLONE_INFOS: 0
 # flag (--exit-code-on-clone-issues)
 GHORG_EXIT_CODE_ON_CLONE_ISSUES: 1
 
+# Allows you to run ghorg with no token (GHORG_<SCM>_TOKEN), SCM server needs to specify no auth required for api calls
+# flag (--no-token)
+GHORG_NO_TOKEN: false
+
+# Skips the calculation of the output directory size at the end of a clone operation.
+# This can save time, especially when cloning a large number of repositories.
+# This is enabled by default
+# flag (--no-dir-size)
+GHORG_NO_DIR_SIZE: false
+
+# Creates a CSV in the GHORG_ABSOLUTE_PATH_TO_CLONE_TO called _ghorg_stats.csv with info about each clone
+# This allows you to track clone data over time such as number of commits and size in megabytes of the clone directory.
+# If the header of the CSV changes, it will create a new file of _ghorg_stats_new_header_${sha256HashOfHeader}.csv this is how we will handle breaking changes to the CSV over time
+# More information at https://github.com/gabrie30/ghorg?tab=readme-ov-file#tracking-clone-data-over-time
+# flag (--stats-enabled)
+GHORG_STATS_ENABLED: false
+
 # Specifies the location of your ghorg conf.yaml, allowing you to have many configuration files, or none at all
 # default: ghorg looks in $HOME/.config/ghorg/conf.yaml, if not set in that location nor as a commandline flag, ghorg will use all default values
 # NOTE: this cannot be set in the configuration file. Its supported through CLI flag and ENV var only.
 # flag (--config)
 # GHORG_CONFIG:
 
+# Get verbose debugging output
+# NOTE: This setting cannot be configured through the configuration file or the CLI. It can only be set as an environment variable.
+# For example: GHORG_DEBUG=true ghorg clone kubernetes
+# When using this env concurrency is set to a value of 1, this behavior can be overwritten for debugging concurrency issues by setting GHORG_CONCURRENCY_DEBUG=true in addition to setting GHORG_DEBUG=true
+# Note when this is enabled the api key used will be printed to stdout
+# GHORG_DEBUG:
+
 # +-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+
 # |G|I|T|H|U|B| |S|P|E|C|I|F|I|C|
 # +-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+
 
 # Add your GitHub token
-# flag (--token, -t) eg: --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2
+# flag (--token, -t) eg: --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2 or --token=~/path/to/file/containing/token
 GHORG_GITHUB_TOKEN:
+
+# Indicate that the Github token should be treated as an app token. Needed if you already obtained a github app token outside the context of ghorg.
+# flag (--github-token-from-github-app)
+GHORG_GITHUB_TOKEN_FROM_GITHUB_APP: false
+
+# Path to your GitHub App PEM file, for authenticating with GitHub App
+# e.g. /home/user/foo/ghorg-app.pem
+# flag (--github-app-pem-path)
+GHORG_GITHUB_APP_PEM_PATH:
+
+# GitHub App Installation ID, for authenticating with GitHub App
+# flag (--github-app-installation-id)
+GHORG_GITHUB_APP_INSTALLATION_ID:
+
+# GitHub App ID, for authenticating with GitHub App
+# flag (--github-app-id)
+GHORG_GITHUB_APP_ID:
+
+# Only available when also using GHORG_CLONE_TYPE: user e.g. --clone-type=user
+# Can be one of: all, owner, member (default: owner)
+GHORG_GITHUB_USER_OPTION:
+
+# Filter repos by a language
+# Can be a comma separated value with no spaces
+# falg (--github-filter-language) e.g.: --github-filter-language=go,ruby,elixir
+GHORG_GITHUB_FILTER_LANGUAGE:
 
 # +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 # |G|I|T|L|A|B| |S|P|E|C|I|F|I|C|
 # +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 # Add your GitLab token
-# flag (--token, -t) eg: --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2
+# flag (--token, -t) eg: --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2 or --token=~/path/to/file/containing/token
 GHORG_GITLAB_TOKEN:
 
 # clones repos in a directory structure that matches gitlab namespaces eg company/unit/subunit/app would clone into ghorg/org/unit/subunit/app
@@ -165,11 +242,15 @@ GHORG_PRESERVE_DIRECTORY_STRUCTURE: false
 
 # Skip TLS certificate verification for hosted gitlab instances
 # flag (--insecure-gitlab-client)
-GHORG_INSECURE_GITLAB_CLIENT:
+GHORG_INSECURE_GITLAB_CLIENT: false
 
 # Exclude gitlab groups by regex
 # flag (--gitlab-group-exclude-match-regex)
 GHORG_GITLAB_GROUP_EXCLUDE_MATCH_REGEX:
+
+# Additionally clone all snippets
+# flag (--clone-snippets)
+GHORG_CLONE_SNIPPETS: false
 
 # +-+-+-+-+-+ +-+-+-+-+-+-+-+-+
 # |G|I|T|E|A| |S|P|E|C|I|F|I|C|
@@ -177,8 +258,12 @@ GHORG_GITLAB_GROUP_EXCLUDE_MATCH_REGEX:
 
 # Add your Gitea token
 # Settings -> Applications -> Generate Token
-# flag (--token, -t) eg: --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2
+# flag (--token, -t) eg: --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2 or --token=~/path/to/file/containing/token
 GHORG_GITEA_TOKEN:
+
+# Must be present if your gitea instance uses http
+# flag (--insecure-gitea-client)
+GHORG_INSECURE_GITEA_CLIENT: false
 
 # +-+-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+
 # |B|I|T|B|U|C|K|E|T| |S|P|E|C|I|F|I|C|
@@ -210,10 +295,22 @@ GHORG_BITBUCKET_USERNAME:
 # flag (--reclone-path)
 GHORG_RECLONE_PATH:
 
-# Get more verbose logging with reclone command
-# flag (--verbose)
-GHORG_RECLONE_VERBOSE: false
-
 # Quiet logging output with reclone command
 # flag (--quiet)
 GHORG_RECLONE_QUIET: false
+
+# +-+-+-+-+-+ +-+-+-+-+-+-+-+ +-+-+-+-+-+-+
+# |G|H|O|R|G| |R|E|C|L|O|N|E| |S|E|R|V|E|R|
+# +-+-+-+-+-+ +-+-+-+-+-+-+-+ +-+-+-+-+-+-+
+
+# Port to run the relcone server on
+# flag (--port) e.g. --port=3000
+GHORG_RECLONE_SERVER_PORT: ":8080"
+
+# +-+-+-+-+-+ +-+-+-+-+-+-+-+ +-+-+-+-+
+# |G|H|O|R|G| |R|E|C|L|O|N|E| |C|R|O|N|
+# +-+-+-+-+-+ +-+-+-+-+-+-+-+ +-+-+-+-+
+
+# Number of minutes to run the cron on
+# flag (--minutes) e.g. --minutes=1440
+GHORG_CRON_TIMER_MINUTES: "60"

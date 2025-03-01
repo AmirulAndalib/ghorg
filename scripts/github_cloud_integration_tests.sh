@@ -8,7 +8,9 @@ cp ./ghorg /usr/local/bin
 
 GITHUB_ORG=forcepushtoproduction
 GHORG_TEST_REPO=ghorg-ci-test
+GHORG_TEST_SELF_PRIVATE_REPO=ghorg_testing_private
 REPO_WITH_TESTING_TOPIC=ghorg-repo-with-topic-of-testing
+GITHUB_SELF=gabrie30
 
 ghorg version
 
@@ -23,6 +25,28 @@ else
     exit 1
 fi
 
+# clone an org preserving scm hostname
+ghorg clone $GITHUB_ORG --token=$GITHUB_TOKEN --preserve-scm-hostname
+
+if [ -e $HOME/ghorg/github.com/$GITHUB_ORG/$GHORG_TEST_REPO ]
+then
+    echo "Pass: github org clone preserving scm hostname"
+else
+    echo "Fail: github org clone preserving scm hostname"
+    exit 1
+fi
+
+# clone an org preserving scm hostname
+ghorg clone $GITHUB_ORG --token=$GITHUB_TOKEN --preserve-scm-hostname --prune-untouched --prune-untouched-no-confirm
+
+if [ -z "$(ls -A $HOME/ghorg/github.com/$GITHUB_ORG)" ]
+then
+    echo "Pass: github org clone preserving scm hostname prune untouched"
+else
+    echo "Fail: github org clone preserving scm hostnamey prune untouched"
+    exit 1
+fi
+
 # clone an org with no config file to a specific path
 ghorg clone $GITHUB_ORG --token=$GITHUB_TOKEN --path=/tmp --output-dir=testing_output_dir
 
@@ -31,6 +55,17 @@ then
     echo "Pass: github org clone, commandline flags take overwrite conf.yaml"
 else
     echo "Fail: github org clone, commandline flags take overwrite conf.yaml"
+    exit 1
+fi
+
+# user cloning selfs private repo
+ghorg clone $GITHUB_SELF --clone-type=user --topics=ghogtestprivate --token=$GITHUB_TOKEN --path=/tmp --output-dir=testing_self_private_repo
+
+if [ -e /tmp/testing_self_private_repo/$GHORG_TEST_SELF_PRIVATE_REPO ]
+then
+    echo "Pass: github self private repos clone"
+else
+    echo "Fail: github self private repos clone"
     exit 1
 fi
 
@@ -73,7 +108,7 @@ mv $HOME/.config/ghorg/conf-bak.yaml $HOME/.config/ghorg/conf.yaml
 # hack to allow sed to be ran on both mac and ubuntu
 sed "s/XTOKEN/${GITHUB_TOKEN}/g" $PWD/scripts/testing_confs/reclone-basic.yaml > $PWD/scripts/testing_confs/updated_reclone.yaml
 
-ghorg reclone --reclone-path=$PWD/scripts/testing_confs/updated_reclone.yaml --verbose
+ghorg reclone --reclone-path=$PWD/scripts/testing_confs/updated_reclone.yaml
 
 if [ -e /tmp/testing_reclone_with_tag/$REPO_WITH_TESTING_TOPIC ]
 then

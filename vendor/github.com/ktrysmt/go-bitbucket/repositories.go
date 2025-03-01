@@ -3,8 +3,7 @@ package bitbucket
 import (
 	"errors"
 	"fmt"
-
-	"github.com/mitchellh/mapstructure"
+	"net/url"
 )
 
 //"github.com/k0kubun/pp"
@@ -32,15 +31,27 @@ type RepositoriesRes struct {
 }
 
 func (r *Repositories) ListForAccount(ro *RepositoriesOptions) (*RepositoriesRes, error) {
-	url := "/repositories"
+	urlPath := "/repositories"
 	if ro.Owner != "" {
-		url += fmt.Sprintf("/%s", ro.Owner)
+		urlPath += fmt.Sprintf("/%s", ro.Owner)
 	}
-	urlStr := r.c.requestUrl(url)
+	urlStr := r.c.requestUrl(urlPath)
+	urlAsUrl, err := url.Parse(urlStr)
+	if err != nil {
+		return nil, err
+	}
+	q := urlAsUrl.Query()
 	if ro.Role != "" {
-		urlStr += "?role=" + ro.Role
+		q.Set("role", ro.Role)
 	}
-	repos, err := r.c.executePaginated("GET", urlStr, "")
+	if ro.Keyword != nil && *ro.Keyword != "" {
+		// https://developer.atlassian.com/cloud/bitbucket/rest/intro/#operators
+		query := fmt.Sprintf("full_name ~ \"%s\"", *ro.Keyword)
+		q.Set("q", query)
+	}
+	urlAsUrl.RawQuery = q.Encode()
+	urlStr = urlAsUrl.String()
+	repos, err := r.c.executePaginated("GET", urlStr, "", ro.Page)
 	if err != nil {
 		return nil, err
 	}
@@ -52,9 +63,20 @@ func (r *Repositories) ListForTeam(ro *RepositoriesOptions) (*RepositoriesRes, e
 	return r.ListForAccount(ro)
 }
 
+// Return all repositories that belong to a project
+func (r *Repositories) ListProject(ro *RepositoriesOptions) (*RepositoriesRes, error) {
+	urlPath := r.c.requestUrl("/repositories")
+	urlPath += fmt.Sprintf("/%s/?q=project.key=\"%s\"", ro.Owner, ro.Project)
+	repos, err := r.c.executePaginated("GET", urlPath, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	return decodeRepositories(repos)
+}
+
 func (r *Repositories) ListPublic() (*RepositoriesRes, error) {
 	urlStr := r.c.requestUrl("/repositories/")
-	repos, err := r.c.executePaginated("GET", urlStr, "")
+	repos, err := r.c.executePaginated("GET", urlStr, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -70,10 +92,9 @@ func decodeRepositories(reposResponse interface{}) (*RepositoriesRes, error) {
 	repoArray := reposResponseMap["values"].([]interface{})
 	var repos []Repository
 	for _, repoEntry := range repoArray {
-		var repo Repository
-		err := mapstructure.Decode(repoEntry, &repo)
+		repo, err := decodeRepository(repoEntry)
 		if err == nil {
-			repos = append(repos, repo)
+			repos = append(repos, *repo)
 		}
 	}
 

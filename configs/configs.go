@@ -1,4 +1,4 @@
-// Package configs sets up the environment. First it sets a number of default envs, then looks in the $HOME/ghorg/conf.yaml to overwrite the defaults. These values will be superseded by any command line flags used
+// Package configs sets up the environment. First it sets a number of default envs, then looks in the $HOME/.config/ghorg/conf.yaml to overwrite the defaults. These values will be superseded by any command line flags used
 package configs
 
 import (
@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/gabrie30/ghorg/colorlog"
 	"github.com/gabrie30/ghorg/scm"
 	"github.com/gabrie30/ghorg/utils"
 
@@ -42,6 +43,9 @@ var (
 
 	// ErrIncorrectProtocolType indicates an unsupported protocol type being used
 	ErrIncorrectProtocolType = errors.New("GHORG_CLONE_PROTOCOL or --protocol must be one of https or ssh")
+
+	// ErrIncorrectGithubUserOptionValue indicates an incorrectly set GHORG_GITHUB_USER_OPTION value
+	ErrIncorrectGithubUserOptionValue = errors.New("GHORG_GITHUB_USER_OPTION or --github-user-option must be one of 'owner', 'member', or 'all' and is only available to be used when GHORG_CLONE_TYPE: user or --clone-type=user is set")
 )
 
 // Load triggers the configs to load first, not sure if this is actually needed
@@ -159,6 +163,31 @@ func GhorgQuiet() bool {
 	return os.Getenv("GHORG_QUIET") != ""
 }
 
+func IsFilePath(path string) bool {
+	pathValue, err := homedir.Expand(path)
+	if err != nil {
+		log.Fatal("Error while expanding tilde to user home directory")
+	}
+	info, err := os.Stat(pathValue)
+	if err != nil {
+		return false
+	}
+	// Check if it's a regular file (not a directory or a symbolic link)
+	if !info.IsDir() && (info.Mode()&os.ModeType == 0) {
+		return true
+	}
+	return false
+}
+
+func GetTokenFromFile(path string) string {
+	expandedPath, _ := homedir.Expand(path)
+	fileContents, err := os.ReadFile(expandedPath)
+	if err != nil {
+		log.Fatal("Error while reading file")
+	}
+	return strings.TrimSpace(string(fileContents))
+}
+
 // GetOrSetToken will set token based on scm
 func GetOrSetToken() {
 	switch os.Getenv("GHORG_SCM_TYPE") {
@@ -168,12 +197,18 @@ func GetOrSetToken() {
 		getOrSetGitLabToken()
 	case "bitbucket":
 		getOrSetBitBucketToken()
+	case "gitea":
+		getOrSetGiteaToken()
 	}
 }
 
 func getOrSetGitHubToken() {
-	var token string
-	if isZero(os.Getenv("GHORG_GITHUB_TOKEN")) || len(os.Getenv("GHORG_GITHUB_TOKEN")) != 40 {
+	var token = os.Getenv("GHORG_GITHUB_TOKEN")
+	if IsFilePath(token) {
+		os.Setenv("GHORG_GITHUB_TOKEN", GetTokenFromFile(token))
+	}
+
+	if isZero(token) {
 		if runtime.GOOS == "windows" {
 			return
 		}
@@ -187,15 +222,13 @@ func getOrSetGitHubToken() {
 }
 
 func getOrSetGitLabToken() {
-	var token string
+	token := os.Getenv("GHORG_GITLAB_TOKEN")
 
-	token = os.Getenv("GHORG_GITLAB_TOKEN")
-
-	if strings.HasPrefix(token, "glpat-") && len(token) == 26 {
-		return
+	if IsFilePath(token) {
+		os.Setenv("GHORG_GITLAB_TOKEN", GetTokenFromFile(token))
 	}
 
-	if isZero(token) || len(token) != 20 {
+	if isZero(token) {
 		if runtime.GOOS == "windows" {
 			return
 		}
@@ -227,12 +260,34 @@ func getOrSetBitBucketToken() {
 	}
 }
 
+func getOrSetGiteaToken() {
+	token := os.Getenv("GHORG_GITEA_TOKEN")
+
+	if IsFilePath(token) {
+		os.Setenv("GHORG_GITEA_TOKEN", GetTokenFromFile(token))
+	}
+
+	if isZero(token) {
+		if runtime.GOOS == "windows" {
+			return
+		}
+		os.Setenv("GHORG_GITEA_TOKEN", token)
+	}
+}
+
 // VerifyTokenSet checks to make sure env is set for the correct scm provider
 func VerifyTokenSet() error {
+
+	if os.Getenv("GHORG_NO_TOKEN") == "true" {
+		return nil
+	}
 
 	scmProvider := os.Getenv("GHORG_SCM_TYPE")
 
 	if scmProvider == "github" && os.Getenv("GHORG_GITHUB_TOKEN") == "" {
+		if os.Getenv("GHORG_GITHUB_APP_PEM_PATH") != "" {
+			return nil
+		}
 		return ErrNoGitHubToken
 	}
 
@@ -245,16 +300,35 @@ func VerifyTokenSet() error {
 	}
 
 	if scmProvider == "bitbucket" {
-		if os.Getenv("GHORG_BITBUCKET_USERNAME") == "" {
-			return ErrNoBitbucketUsername
-		}
+		if os.Getenv("GHORG_BITBUCKET_OAUTH_TOKEN") == "" {
 
-		if os.Getenv("GHORG_BITBUCKET_APP_PASSWORD") == "" {
-			return ErrNoBitbucketAppPassword
+			if os.Getenv("GHORG_BITBUCKET_USERNAME") == "" {
+				return ErrNoBitbucketUsername
+			}
+
+			if os.Getenv("GHORG_BITBUCKET_APP_PASSWORD") == "" {
+				return ErrNoBitbucketAppPassword
+			}
 		}
 	}
 
 	return nil
+}
+
+func GetCloudScmTypeHostnames() string {
+	switch os.Getenv("GHORG_SCM_TYPE") {
+	case "github":
+		return "github.com"
+	case "gitlab":
+		return "gitlab.com"
+	case "gitea":
+		return "gitea.com"
+	case "bitbucket":
+		return "bitbucket.com"
+	default:
+		colorlog.PrintErrorAndExit("Unsupported GHORG_SCM_TYPE")
+		return ""
+	}
 }
 
 // VerifyConfigsSetCorrectly makes sure flags are set to appropriate values
@@ -262,6 +336,7 @@ func VerifyConfigsSetCorrectly() error {
 	scmType := os.Getenv("GHORG_SCM_TYPE")
 	cloneType := os.Getenv("GHORG_CLONE_TYPE")
 	protocol := os.Getenv("GHORG_CLONE_PROTOCOL")
+	githubUserOption := os.Getenv("GHORG_GITHUB_USER_OPTION")
 
 	if !utils.IsStringInSlice(scmType, scm.SupportedClients()) {
 		return ErrIncorrectScmType
@@ -269,6 +344,12 @@ func VerifyConfigsSetCorrectly() error {
 
 	if cloneType != "user" && cloneType != "org" {
 		return ErrIncorrectCloneType
+	}
+
+	if scmType == "github" && cloneType == "user" {
+		if githubUserOption != "owner" && githubUserOption != "all" && githubUserOption != "member" {
+			return ErrIncorrectGithubUserOptionValue
+		}
 	}
 
 	if protocol != "ssh" && protocol != "https" {

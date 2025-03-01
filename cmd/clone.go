@@ -3,8 +3,8 @@ package cmd
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/url"
 	"os"
@@ -12,21 +12,36 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gabrie30/ghorg/colorlog"
 	"github.com/gabrie30/ghorg/configs"
 	"github.com/gabrie30/ghorg/git"
 	"github.com/gabrie30/ghorg/scm"
+	"github.com/gabrie30/ghorg/utils"
 	"github.com/korovkin/limiter"
 	"github.com/spf13/cobra"
 )
 
 var cloneCmd = &cobra.Command{
-	Use:   "clone",
+	Use:   "clone [org/user]",
 	Short: "Clone user or org repos from GitHub, GitLab, Gitea or Bitbucket",
-	Long:  `Clone user or org repos from GitHub, GitLab, Gitea or Bitbucket. See $HOME/ghorg/conf.yaml for defaults, its likely you will need to update some of these values of use the flags to overwrite them. Values are set first by a default value, then based off what is set in $HOME/ghorg/conf.yaml, finally the cli flags, which have the highest level of precedence.`,
-	Run:   cloneFunc,
+	Long: `Clone user or org repos from GitHub, GitLab, Gitea or Bitbucket. See $HOME/.config/ghorg/conf.yaml for defaults, its likely you will need to update some of these values of use the flags to overwrite them. Values are set first by a default value, then based off what is set in $HOME/.config/ghorg/conf.yaml, finally the cli flags, which have the highest level of precedence.
+
+For complete examples of how to clone repos from each SCM provider, run one of the following examples commands:
+$ ghorg examples github
+$ ghorg examples gitlab
+$ ghorg examples bitbucket
+$ ghorg examples gitea
+
+Or see examples directory at https://github.com/gabrie30/ghorg/tree/master/examples
+`,
+	Run: cloneFunc,
 }
+
+var cachedDirSizeMB float64
+var isDirSizeCached bool
 
 func cloneFunc(cmd *cobra.Command, argz []string) {
 	if cmd.Flags().Changed("path") {
@@ -43,6 +58,26 @@ func cloneFunc(cmd *cobra.Command, argz []string) {
 		os.Setenv("GHORG_BRANCH", cmd.Flag("branch").Value.String())
 	}
 
+	if cmd.Flags().Changed("github-token-from-github-app") {
+		os.Setenv("GHORG_GITHUB_TOKEN_FROM_GITHUB_APP", cmd.Flag("github-token-from-github-app").Value.String())
+	}
+
+	if cmd.Flags().Changed("github-app-pem-path") {
+		os.Setenv("GHORG_GITHUB_APP_PEM_PATH", cmd.Flag("github-app-pem-path").Value.String())
+	}
+
+	if cmd.Flags().Changed("github-app-installation-id") {
+		os.Setenv("GHORG_GITHUB_APP_INSTALLATION_ID", cmd.Flag("github-app-installation-id").Value.String())
+	}
+
+	if cmd.Flags().Changed("github-filter-language") {
+		os.Setenv("GHORG_GITHUB_FILTER_LANGUAGE", cmd.Flag("github-filter-language").Value.String())
+	}
+
+	if cmd.Flags().Changed("github-app-id") {
+		os.Setenv("GHORG_GITHUB_APP_ID", cmd.Flag("github-app-id").Value.String())
+	}
+
 	if cmd.Flags().Changed("bitbucket-username") {
 		os.Setenv("GHORG_BITBUCKET_USERNAME", cmd.Flag("bitbucket-username").Value.String())
 	}
@@ -57,6 +92,11 @@ func cloneFunc(cmd *cobra.Command, argz []string) {
 		os.Setenv("GHORG_SCM_TYPE", scmType)
 	}
 
+	if cmd.Flags().Changed("github-user-option") {
+		opt := cmd.Flag("github-user-option").Value.String()
+		os.Setenv("GHORG_GITHUB_USER_OPTION", opt)
+	}
+
 	if cmd.Flags().Changed("base-url") {
 		url := cmd.Flag("base-url").Value.String()
 		os.Setenv("GHORG_SCM_BASE_URL", url)
@@ -65,6 +105,11 @@ func cloneFunc(cmd *cobra.Command, argz []string) {
 	if cmd.Flags().Changed("concurrency") {
 		f := cmd.Flag("concurrency").Value.String()
 		os.Setenv("GHORG_CONCURRENCY", f)
+	}
+
+	if cmd.Flags().Changed("clone-depth") {
+		f := cmd.Flag("clone-depth").Value.String()
+		os.Setenv("GHORG_CLONE_DEPTH", f)
 	}
 
 	if cmd.Flags().Changed("exit-code-on-clone-infos") {
@@ -112,13 +157,26 @@ func cloneFunc(cmd *cobra.Command, argz []string) {
 		os.Setenv("GHORG_IGNORE_PATH", path)
 	}
 
+	if cmd.Flags().Changed("target-repos-path") {
+		path := cmd.Flag("target-repos-path").Value.String()
+		os.Setenv("GHORG_TARGET_REPOS_PATH", path)
+	}
+
 	if cmd.Flags().Changed("git-filter") {
 		filter := cmd.Flag("git-filter").Value.String()
 		os.Setenv("GHORG_GIT_FILTER", filter)
 	}
 
+	if cmd.Flags().Changed("preserve-scm-hostname") {
+		os.Setenv("GHORG_PRESERVE_SCM_HOSTNAME", "true")
+	}
+
 	if cmd.Flags().Changed("skip-archived") {
 		os.Setenv("GHORG_SKIP_ARCHIVED", "true")
+	}
+
+	if cmd.Flags().Changed("stats-enabled") {
+		os.Setenv("GHORG_STATS_ENABLED", "true")
 	}
 
 	if cmd.Flags().Changed("no-clean") {
@@ -131,6 +189,14 @@ func cloneFunc(cmd *cobra.Command, argz []string) {
 
 	if cmd.Flags().Changed("prune-no-confirm") {
 		os.Setenv("GHORG_PRUNE_NO_CONFIRM", "true")
+	}
+
+	if cmd.Flags().Changed("prune-untouched") {
+		os.Setenv("GHORG_PRUNE_UNTOUCHED", "true")
+	}
+
+	if cmd.Flags().Changed("prune-untouched-no-confirm") {
+		os.Setenv("GHORG_PRUNE_UNTOUCHED_NO_CONFIRM", "true")
 	}
 
 	if cmd.Flags().Changed("fetch-all") {
@@ -149,8 +215,16 @@ func cloneFunc(cmd *cobra.Command, argz []string) {
 		os.Setenv("GHORG_CLONE_WIKI", "true")
 	}
 
+	if cmd.Flags().Changed("clone-snippets") {
+		os.Setenv("GHORG_CLONE_SNIPPETS", "true")
+	}
+
 	if cmd.Flags().Changed("insecure-gitlab-client") {
 		os.Setenv("GHORG_INSECURE_GITLAB_CLIENT", "true")
+	}
+
+	if cmd.Flags().Changed("insecure-gitea-client") {
+		os.Setenv("GHORG_INSECURE_GITEA_CLIENT", "true")
 	}
 
 	if cmd.Flags().Changed("skip-forks") {
@@ -159,6 +233,14 @@ func cloneFunc(cmd *cobra.Command, argz []string) {
 
 	if cmd.Flags().Changed("quiet") {
 		os.Setenv("GHORG_QUIET", "true")
+	}
+
+	if cmd.Flags().Changed("no-token") {
+		os.Setenv("GHORG_NO_TOKEN", "true")
+	}
+
+	if cmd.Flags().Changed("no-dir-size") {
+		os.Setenv("GHORG_NO_DIR_SIZE", "true")
 	}
 
 	if cmd.Flags().Changed("preserve-dir") {
@@ -186,10 +268,14 @@ func cloneFunc(cmd *cobra.Command, argz []string) {
 	configs.GetOrSetToken()
 
 	if cmd.Flags().Changed("token") {
+		token := cmd.Flag("token").Value.String()
+		if configs.IsFilePath(token) {
+			token = configs.GetTokenFromFile(token)
+		}
 		if os.Getenv("GHORG_SCM_TYPE") == "github" {
-			os.Setenv("GHORG_GITHUB_TOKEN", cmd.Flag("token").Value.String())
+			os.Setenv("GHORG_GITHUB_TOKEN", token)
 		} else if os.Getenv("GHORG_SCM_TYPE") == "gitlab" {
-			os.Setenv("GHORG_GITLAB_TOKEN", cmd.Flag("token").Value.String())
+			os.Setenv("GHORG_GITLAB_TOKEN", token)
 		} else if os.Getenv("GHORG_SCM_TYPE") == "bitbucket" {
 			if cmd.Flags().Changed("bitbucket-username") {
 				os.Setenv("GHORG_BITBUCKET_APP_PASSWORD", cmd.Flag("token").Value.String())
@@ -197,7 +283,7 @@ func cloneFunc(cmd *cobra.Command, argz []string) {
 				os.Setenv("GHORG_BITBUCKET_OAUTH_TOKEN", cmd.Flag("token").Value.String())
 			}
 		} else if os.Getenv("GHORG_SCM_TYPE") == "gitea" {
-			os.Setenv("GHORG_GITEA_TOKEN", cmd.Flag("token").Value.String())
+			os.Setenv("GHORG_GITEA_TOKEN", token)
 		}
 	}
 	err := configs.VerifyTokenSet()
@@ -212,9 +298,12 @@ func cloneFunc(cmd *cobra.Command, argz []string) {
 		os.Exit(1)
 	}
 
+	if os.Getenv("GHORG_PRESERVE_SCM_HOSTNAME") == "true" {
+		updateAbsolutePathToCloneToWithHostname()
+	}
+
 	setOutputDirName(argz)
 	setOuputDirAbsolutePath()
-	args = argz
 	targetCloneSource = argz[0]
 	setupRepoClone()
 }
@@ -271,6 +360,7 @@ func getCloneUrls(isOrg bool) ([]scm.Repo, error) {
 	if isOrg {
 		return client.GetOrgRepos(targetCloneSource)
 	}
+
 	return client.GetUserRepos(targetCloneSource)
 }
 
@@ -312,6 +402,23 @@ func printRemainingMessages() {
 			colorlog.PrintError(e)
 		}
 	}
+}
+
+func readTargetReposFile() ([]string, error) {
+	file, err := os.Open(os.Getenv("GHORG_TARGET_REPOS_PATH"))
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		if scanner.Text() != "" {
+			lines = append(lines, scanner.Text())
+		}
+	}
+	return lines, scanner.Err()
 }
 
 func readGhorgIgnore() ([]string, error) {
@@ -399,18 +506,6 @@ func filterByExcludeMatchPrefix(repos []scm.Repo) []scm.Repo {
 	return filteredRepos
 }
 
-// exclude wikis from repo count
-func getRepoCountOnly(targets []scm.Repo) int {
-	count := 0
-	for _, t := range targets {
-		if !t.IsWiki {
-			count++
-		}
-	}
-
-	return count
-}
-
 func hasRepoNameCollisions(repos []scm.Repo) (map[string]bool, bool) {
 
 	repoNameWithCollisions := make(map[string]bool)
@@ -426,6 +521,16 @@ func hasRepoNameCollisions(repos []scm.Repo) (map[string]bool, bool) {
 	hasCollisions := false
 
 	for _, repo := range repos {
+
+		// Snippets should never have collions because we append the snippet id to the directory name
+		if repo.IsGitLabSnippet {
+			continue
+		}
+
+		if repo.IsWiki {
+			continue
+		}
+
 		if _, ok := repoNameWithCollisions[repo.Name]; ok {
 			repoNameWithCollisions[repo.Name] = true
 			hasCollisions = true
@@ -451,7 +556,7 @@ func printDryRun(repos []scm.Repo) {
 			// to do.
 			colorlog.PrintInfo("\nScanning for local clones that have been removed on remote...")
 
-			files, err := ioutil.ReadDir(outputDirAbsolutePath)
+			files, err := os.ReadDir(outputDirAbsolutePath)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -479,6 +584,21 @@ func trimCollisionFilename(filename string) string {
 	return filename
 }
 
+func getCloneableInventory(allRepos []scm.Repo) (int, int, int, int) {
+	var wikis, snippets, repos, total int
+	for _, repo := range allRepos {
+		if repo.IsGitLabSnippet {
+			snippets++
+		} else if repo.IsWiki {
+			wikis++
+		} else {
+			repos++
+		}
+	}
+	total = repos + snippets + wikis
+	return total, repos, snippets, wikis
+}
+
 // CloneAllRepos clones all repos
 func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 	// Filter repos that have attributes that don't need specific scm api calls
@@ -499,43 +619,26 @@ func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 		cloneTargets = filterByExcludeMatchPrefix(cloneTargets)
 	}
 
-	// filter repos down based on ghorgignore if one exists
-	_, err := os.Stat(configs.GhorgIgnoreLocation())
-	if !os.IsNotExist(err) {
-		// Open the file parse each line and remove cloneTargets containing
-		toIgnore, err := readGhorgIgnore()
-		if err != nil {
-			colorlog.PrintErrorAndExit(fmt.Sprintf("Error parsing your ghorgignore, error: %v", err))
-		}
-
-		colorlog.PrintInfo("Using ghorgignore, filtering repos down...")
-
-		filteredCloneTargets := []scm.Repo{}
-		var flag bool
-		for _, cloned := range cloneTargets {
-			flag = false
-			for _, ignore := range toIgnore {
-				if strings.Contains(cloned.URL, ignore) {
-					flag = true
-				}
-			}
-
-			if !flag {
-				filteredCloneTargets = append(filteredCloneTargets, cloned)
-			}
-		}
-
-		cloneTargets = filteredCloneTargets
-
+	if os.Getenv("GHORG_TARGET_REPOS_PATH") != "" {
+		colorlog.PrintInfo("Filtering repos down by target repos path...")
+		cloneTargets = filterByTargetReposPath(cloneTargets)
 	}
 
-	repoCount := getRepoCountOnly(cloneTargets)
+	cloneTargets = filterByGhorgignore(cloneTargets)
 
-	if os.Getenv("GHORG_CLONE_WIKI") == "true" {
-		wikiCount := strconv.Itoa(len(cloneTargets) - repoCount)
-		colorlog.PrintInfo(strconv.Itoa(repoCount) + " repos found in " + targetCloneSource + ", including " + wikiCount + " enabled wikis\n")
+	totalResourcesToClone, reposToCloneCount, snippetToCloneCount, wikisToCloneCount := getCloneableInventory(cloneTargets)
+
+	if os.Getenv("GHORG_CLONE_WIKI") == "true" && os.Getenv("GHORG_CLONE_SNIPPETS") == "true" {
+		m := fmt.Sprintf("%v resources to clone found in %v, %v repos, %v snippets, and %v wikis\n", totalResourcesToClone, targetCloneSource, snippetToCloneCount, reposToCloneCount, wikisToCloneCount)
+		colorlog.PrintInfo(m)
+	} else if os.Getenv("GHORG_CLONE_WIKI") == "true" {
+		m := fmt.Sprintf("%v resources to clone found in %v, %v repos and %v wikis\n", totalResourcesToClone, targetCloneSource, reposToCloneCount, wikisToCloneCount)
+		colorlog.PrintInfo(m)
+	} else if os.Getenv("GHORG_CLONE_SNIPPETS") == "true" {
+		m := fmt.Sprintf("%v resources to clone found in %v, %v repos and %v snippets\n", totalResourcesToClone, targetCloneSource, reposToCloneCount, snippetToCloneCount)
+		colorlog.PrintInfo(m)
 	} else {
-		colorlog.PrintInfo(strconv.Itoa(repoCount) + " repos found in " + targetCloneSource + "\n")
+		colorlog.PrintInfo(strconv.Itoa(reposToCloneCount) + " repos found in " + targetCloneSource + "\n")
 	}
 
 	if os.Getenv("GHORG_DRY_RUN") == "true" {
@@ -555,42 +658,145 @@ func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 
 	limit := limiter.NewConcurrencyLimiter(l)
 
-	var cloneCount, pulledCount, updateRemoteCount int
+	var cloneCount, pulledCount, updateRemoteCount, newCommits int
+
+	// maps in go are not safe for concurrent use
+	var mutex = &sync.RWMutex{}
+	var untouchedReposToPrune []string
 
 	for i := range cloneTargets {
 		repo := cloneTargets[i]
+
+		// We use this because we dont want spaces in the final directory, using the web address makes it more file friendly
+		// In the case of root level snippets we use the title which will have spaces in it, the url uses an ID so its not possible to use name from url
+		// With snippets that originate on repos, we use that repo name
 		repoSlug := getAppNameFromURL(repo.URL)
+
+		if repo.IsGitLabSnippet && !repo.IsGitLabRootLevelSnippet {
+			repoSlug = getAppNameFromURL(repo.GitLabSnippetInfo.URLOfRepo)
+		} else if repo.IsGitLabRootLevelSnippet {
+			repoSlug = repo.Name
+		}
+
 		limit.Execute(func() {
 			if repo.Path != "" && os.Getenv("GHORG_PRESERVE_DIRECTORY_STRUCTURE") == "true" {
 				repoSlug = repo.Path
 			}
+
+			mutex.Lock()
+			var inHash bool
+			if repo.IsGitLabSnippet && !repo.IsGitLabRootLevelSnippet {
+				inHash = repoNameWithCollisions[repo.GitLabSnippetInfo.NameOfRepo]
+			} else {
+				inHash = repoNameWithCollisions[repo.Name]
+			}
+
+			mutex.Unlock()
 			// Only GitLab repos can have collisions due to groups and subgroups
 			// If there are collisions and this is a repo with a naming collision change name to avoid collisions
-			if hasCollisions && repoNameWithCollisions[repo.Name] {
-				repoSlug = trimCollisionFilename(strings.Replace(repo.Path, "/", "_", -1))
-
+			if hasCollisions && inHash {
+				repoSlug = trimCollisionFilename(strings.Replace(repo.Path, string(os.PathSeparator), "_", -1))
+				if repo.IsWiki {
+					if !strings.HasSuffix(repoSlug, ".wiki") {
+						repoSlug = repoSlug + ".wiki"
+					}
+				}
+				if repo.IsGitLabSnippet && !repo.IsGitLabRootLevelSnippet {
+					if !strings.HasSuffix(repoSlug, ".snippets") {
+						repoSlug = repoSlug + ".snippets"
+					}
+				}
+				mutex.Lock()
+				slugCollision := repoNameWithCollisions[repoSlug]
+				mutex.Unlock()
 				// If a collision has another collision with trimmed name append a number
-				if _, ok := repoNameWithCollisions[repoSlug]; ok {
+				if ok := slugCollision; ok {
 					repoSlug = fmt.Sprintf("_%v_%v", strconv.Itoa(i), repoSlug)
 				} else {
+					mutex.Lock()
 					repoNameWithCollisions[repoSlug] = true
+					mutex.Unlock()
+				}
+			}
+
+			if repo.IsWiki {
+				if !strings.HasSuffix(repoSlug, ".wiki") {
+					repoSlug = repoSlug + ".wiki"
+				}
+			}
+			if repo.IsGitLabSnippet && !repo.IsGitLabRootLevelSnippet {
+				if !strings.HasSuffix(repoSlug, ".snippets") {
+					repoSlug = repoSlug + ".snippets"
 				}
 			}
 
 			repo.HostPath = filepath.Join(outputDirAbsolutePath, repoSlug)
 
-			if repo.IsWiki {
-				if !strings.HasSuffix(repo.HostPath, ".wiki") {
-					repo.HostPath = repo.HostPath + ".wiki"
+			if repo.IsGitLabRootLevelSnippet {
+				repo.HostPath = filepath.Join(outputDirAbsolutePath, "_ghorg_root_level_snippets", repo.GitLabSnippetInfo.Title+"-"+repo.GitLabSnippetInfo.ID)
+			} else if repo.IsGitLabSnippet {
+				repo.HostPath = filepath.Join(outputDirAbsolutePath, repoSlug, repo.GitLabSnippetInfo.Title+"-"+repo.GitLabSnippetInfo.ID)
+			}
+
+			repoWillBePulled := repoExistsLocally(repo)
+
+			// Repos are considered untouched if
+			// 1. No new branches or zero branches
+			// 2. No new commits
+			// 3. No modified changes
+			if os.Getenv("GHORG_PRUNE_UNTOUCHED") == "true" && repoWillBePulled {
+				git.FetchCloneBranch(repo)
+
+				branches, err := git.Branch(repo)
+				if err != nil {
+					colorlog.PrintError(fmt.Sprintf("Failed to list local branches for repository %s: %v", repo.Name, err))
+					return
 				}
+
+				// Delete if it has no branches
+				if branches == "" {
+					untouchedReposToPrune = append(untouchedReposToPrune, repo.HostPath)
+					return
+				}
+
+				if len(strings.Split(strings.TrimSpace(branches), "\n")) > 1 {
+					return
+				}
+
+				status, err := git.ShortStatus(repo)
+				if err != nil {
+					colorlog.PrintError(fmt.Sprintf("Failed to get short status for repository %s: %v", repo.Name, err))
+					return
+				}
+
+				if status != "" {
+					return
+				}
+
+				// Check for new commits on the branch that exist locally but not on the remote
+				commits, err := git.RevListCompare(repo, "HEAD", "@{u}")
+				if err != nil {
+					colorlog.PrintError(fmt.Sprintf("Failed to get commit differences for repository %s. The repository may be empty or does not have a .git directory. Error: %v", repo.Name, err))
+					return
+				}
+				if commits != "" {
+					return
+				}
+
+				untouchedReposToPrune = append(untouchedReposToPrune, repo.HostPath)
+			}
+
+			// Don't clone any new repos when prune untouched is active
+			if os.Getenv("GHORG_PRUNE_UNTOUCHED") == "true" {
+				return
 			}
 
 			action := "cloning"
-			if repoExistsLocally(repo) {
+			if repoWillBePulled {
 				// prevents git from asking for user for credentials, needs to be unset so creds aren't stored
 				err := git.SetOriginWithCredentials(repo)
 				if err != nil {
-					e := fmt.Sprintf("Problem setting remote with credentials Repo: %s Error: %v", repo.Name, err)
+					e := fmt.Sprintf("Problem setting remote with credentials on: %s Error: %v", repo.Name, err)
 					cloneErrors = append(cloneErrors, e)
 					return
 				}
@@ -600,13 +806,13 @@ func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 					action = "updating remote"
 					// Theres no way to tell if a github repo has a wiki to clone
 					if err != nil && repo.IsWiki {
-						e := fmt.Sprintf("Wiki may be enabled but there was no content to clone on Repo: %s Error: %v", repo.URL, err)
+						e := fmt.Sprintf("Wiki may be enabled but there was no content to clone on: %s Error: %v", repo.URL, err)
 						cloneInfos = append(cloneInfos, e)
 						return
 					}
 
 					if err != nil {
-						e := fmt.Sprintf("Could not update remotes in Repo: %s Error: %v", repo.URL, err)
+						e := fmt.Sprintf("Could not update remotes: %s Error: %v", repo.URL, err)
 						cloneErrors = append(cloneErrors, e)
 						return
 					}
@@ -617,24 +823,48 @@ func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 
 					// Theres no way to tell if a github repo has a wiki to clone
 					if err != nil && repo.IsWiki {
-						e := fmt.Sprintf("Wiki may be enabled but there was no content to clone on Repo: %s Error: %v", repo.URL, err)
+						e := fmt.Sprintf("Wiki may be enabled but there was no content to clone on: %s Error: %v", repo.URL, err)
 						cloneInfos = append(cloneInfos, e)
 						return
 					}
 
 					if err != nil {
-						e := fmt.Sprintf("Could not fetch remotes in Repo: %s Error: %v", repo.URL, err)
+						e := fmt.Sprintf("Could not fetch remotes: %s Error: %v", repo.URL, err)
 						cloneErrors = append(cloneErrors, e)
 						return
 					}
 
 				} else {
+					if os.Getenv("GHORG_FETCH_ALL") == "true" {
+						err = git.FetchAll(repo)
+
+						if err != nil {
+							e := fmt.Sprintf("Could not fetch remotes: %s Error: %v", repo.URL, err)
+							cloneErrors = append(cloneErrors, e)
+							return
+						}
+					}
+
 					err := git.Checkout(repo)
 					if err != nil {
-						e := fmt.Sprintf("Could not checkout out %s, branch may not exist or may not have any contents, no changes made Repo: %s Error: %v", repo.CloneBranch, repo.URL, err)
-						cloneInfos = append(cloneInfos, e)
-						return
+						git.FetchCloneBranch(repo)
+
+						// Retry checkout
+						errRetry := git.Checkout(repo)
+						if errRetry != nil {
+							e := fmt.Sprintf("Could not checkout out %s, branch may not exist or may not have any contents/commits, no changes made on: %s Error: %v", repo.CloneBranch, repo.URL, errRetry)
+							cloneErrors = append(cloneErrors, e)
+							return
+						}
 					}
+
+					count, _ := git.RepoCommitCount(repo)
+					if err != nil {
+						e := fmt.Sprintf("Problem trying to get pre pull commit count for on repo: %s", repo.URL)
+						cloneInfos = append(cloneInfos, e)
+					}
+
+					repo.Commits.CountPrePull = count
 
 					err = git.Clean(repo)
 
@@ -647,7 +877,7 @@ func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 					err = git.Reset(repo)
 
 					if err != nil {
-						e := fmt.Sprintf("Problem resetting %s Repo: %s Error: %v", repo.CloneBranch, repo.URL, err)
+						e := fmt.Sprintf("Problem resetting branch: %s for: %s Error: %v", repo.CloneBranch, repo.URL, err)
 						cloneErrors = append(cloneErrors, e)
 						return
 					}
@@ -655,28 +885,27 @@ func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 					err = git.Pull(repo)
 
 					if err != nil {
-						e := fmt.Sprintf("Problem trying to pull %v Repo: %s Error: %v", repo.CloneBranch, repo.URL, err)
+						e := fmt.Sprintf("Problem trying to pull branch: %v for: %s Error: %v", repo.CloneBranch, repo.URL, err)
 						cloneErrors = append(cloneErrors, e)
 						return
 					}
 
+					count, err = git.RepoCommitCount(repo)
+					if err != nil {
+						e := fmt.Sprintf("Problem trying to get post pull commit count for on repo: %s", repo.URL)
+						cloneInfos = append(cloneInfos, e)
+					}
+
+					repo.Commits.CountPostPull = count
+					repo.Commits.CountDiff = (repo.Commits.CountPostPull - repo.Commits.CountPrePull)
+					newCommits = (newCommits + repo.Commits.CountDiff)
 					action = "pulling"
 					pulledCount++
-
-					if os.Getenv("GHORG_FETCH_ALL") == "true" {
-						err = git.FetchAll(repo)
-
-						if err != nil {
-							e := fmt.Sprintf("Could not fetch remotes in Repo: %s Error: %v", repo.URL, err)
-							cloneErrors = append(cloneErrors, e)
-							return
-						}
-					}
 				}
 
 				err = git.SetOrigin(repo)
 				if err != nil {
-					e := fmt.Sprintf("Problem resetting remote Repo: %s Error: %v", repo.Name, err)
+					e := fmt.Sprintf("Problem resetting remote: %s Error: %v", repo.Name, err)
 					cloneErrors = append(cloneErrors, e)
 					return
 				}
@@ -687,13 +916,13 @@ func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 
 				// Theres no way to tell if a github repo has a wiki to clone
 				if err != nil && repo.IsWiki {
-					e := fmt.Sprintf("Wiki may be enabled but there was no content to clone on Repo: %s Error: %v", repo.URL, err)
+					e := fmt.Sprintf("Wiki may be enabled but there was no content to clone: %s Error: %v", repo.URL, err)
 					cloneInfos = append(cloneInfos, e)
 					return
 				}
 
 				if err != nil {
-					e := fmt.Sprintf("Problem trying to clone Repo: %s Error: %v", repo.URL, err)
+					e := fmt.Sprintf("Problem trying to clone: %s Error: %v", repo.URL, err)
 					cloneErrors = append(cloneErrors, e)
 					return
 				}
@@ -701,7 +930,7 @@ func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 				if os.Getenv("GHORG_BRANCH") != "" {
 					err := git.Checkout(repo)
 					if err != nil {
-						e := fmt.Sprintf("Could not checkout out %s, branch may not exist or may not have any contents, no changes made Repo: %s Error: %v", repo.CloneBranch, repo.URL, err)
+						e := fmt.Sprintf("Could not checkout out %s, branch may not exist or may not have any contents/commits, no changes to: %s Error: %v", repo.CloneBranch, repo.URL, err)
 						cloneInfos = append(cloneInfos, e)
 						return
 					}
@@ -715,7 +944,7 @@ func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 
 				// if repo has wiki, but content does not exist this is going to error
 				if err != nil {
-					e := fmt.Sprintf("Problem trying to set remote on Repo: %s Error: %v", repo.URL, err)
+					e := fmt.Sprintf("Problem trying to set remote: %s Error: %v", repo.URL, err)
 					cloneErrors = append(cloneErrors, e)
 					return
 				}
@@ -724,38 +953,86 @@ func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 					err = git.FetchAll(repo)
 
 					if err != nil {
-						e := fmt.Sprintf("Could not fetch remotes in Repo: %s Error: %v", repo.URL, err)
+						e := fmt.Sprintf("Could not fetch remotes: %s Error: %v", repo.URL, err)
 						cloneErrors = append(cloneErrors, e)
 						return
 					}
 				}
 			}
 
-			colorlog.PrintSuccess("Success " + action + " repo: " + repo.URL + " -> branch: " + repo.CloneBranch)
+			if repoWillBePulled && repo.Commits.CountDiff > 0 {
+				colorlog.PrintSuccess(fmt.Sprintf("Success %s %s, branch: %s, new commits: %d", action, repo.URL, repo.CloneBranch, repo.Commits.CountDiff))
+			} else {
+				colorlog.PrintSuccess(fmt.Sprintf("Success %s %s, branch: %s", action, repo.URL, repo.CloneBranch))
+			}
 		})
 
 	}
 
 	limit.WaitAndClose()
+	var untouchedPrunes int
+
+	if os.Getenv("GHORG_PRUNE_UNTOUCHED") == "true" && len(untouchedReposToPrune) > 0 {
+		if os.Getenv("GHORG_PRUNE_UNTOUCHED_NO_CONFIRM") != "true" {
+			colorlog.PrintSuccess(fmt.Sprintf("PLEASE CONFIRM: The following %d untouched repositories will be deleted. Press enter to confirm: ", len(untouchedReposToPrune)))
+			for _, repoPath := range untouchedReposToPrune {
+				colorlog.PrintInfo(fmt.Sprintf("- %s", repoPath))
+			}
+			fmt.Scanln()
+		}
+
+		for _, repoPath := range untouchedReposToPrune {
+			err := os.RemoveAll(repoPath)
+			if err != nil {
+				colorlog.PrintError(fmt.Sprintf("Failed to prune repository at %s: %v", repoPath, err))
+			} else {
+				untouchedPrunes++
+				colorlog.PrintSuccess(fmt.Sprintf("Successfully deleted %s", repoPath))
+			}
+		}
+	}
 
 	printRemainingMessages()
-	printCloneStatsMessage(cloneCount, pulledCount, updateRemoteCount)
+	printCloneStatsMessage(cloneCount, pulledCount, updateRemoteCount, newCommits, untouchedPrunes)
 
 	if hasCollisions {
 		fmt.Println("")
 		colorlog.PrintInfo("ATTENTION: ghorg detected collisions in repo names from the groups that were cloned. This occurs when one or more groups share common repo names trying to be cloned to the same directory. The repos that would have collisions were renamed with the group/subgroup appended.")
+		if os.Getenv("GHORG_DEBUG") != "" {
+			fmt.Println("")
+			colorlog.PrintInfo("Collisions Occured in the following repos...")
+			for repoName, collision := range repoNameWithCollisions {
+				if collision {
+					colorlog.PrintInfo("- " + repoName)
+				}
+			}
+		}
 	}
 
+	var pruneCount int
+	cloneInfosCount := len(cloneInfos)
+	cloneErrorsCount := len(cloneErrors)
+	allReposToCloneCount := len(cloneTargets)
 	// Now, clean up local repos that don't exist in remote, if prune flag is set
 	if os.Getenv("GHORG_PRUNE") == "true" {
-		pruneRepos(cloneTargets)
+		pruneCount = pruneRepos(cloneTargets)
 	}
 
 	if os.Getenv("GHORG_QUIET") != "true" {
-		colorlog.PrintSuccess(fmt.Sprintf("\nFinished! %s", outputDirAbsolutePath))
+		if os.Getenv("GHORG_NO_DIR_SIZE") == "false" {
+			printFinishedWithDirSize()
+		} else {
+			colorlog.PrintSuccess(fmt.Sprintf("\nFinished! %s", outputDirAbsolutePath))
+		}
 	}
 
-	if os.Getenv("GHORG_EXIT_CODE_ON_CLONE_INFOS") != "0" && len(cloneInfos) > 0 {
+	// This needs to be called after printFinishedWithDirSize()
+	if os.Getenv("GHORG_STATS_ENABLED") == "true" {
+		date := time.Now().Format("2006-01-02 15:04:05")
+		writeGhorgStats(date, allReposToCloneCount, cloneCount, pulledCount, cloneInfosCount, cloneErrorsCount, updateRemoteCount, newCommits, pruneCount, hasCollisions)
+	}
+
+	if os.Getenv("GHORG_EXIT_CODE_ON_CLONE_INFOS") != "0" && cloneInfosCount > 0 {
 		exitCode, err := strconv.Atoi(os.Getenv("GHORG_EXIT_CODE_ON_CLONE_INFOS"))
 		if err != nil {
 			colorlog.PrintError("Could not convert GHORG_EXIT_CODE_ON_CLONE_INFOS from string to integer")
@@ -765,7 +1042,7 @@ func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 		os.Exit(exitCode)
 	}
 
-	if len(cloneErrors) > 0 {
+	if cloneErrorsCount > 0 {
 		exitCode, err := strconv.Atoi(os.Getenv("GHORG_EXIT_CODE_ON_CLONE_ISSUES"))
 		if err != nil {
 			colorlog.PrintError("Could not convert GHORG_EXIT_CODE_ON_CLONE_ISSUES from string to integer")
@@ -777,10 +1054,228 @@ func CloneAllRepos(git git.Gitter, cloneTargets []scm.Repo) {
 
 }
 
-func pruneRepos(cloneTargets []scm.Repo) {
+func getGhorgStatsFilePath() string {
+	var statsFilePath string
+	absolutePath := os.Getenv("GHORG_ABSOLUTE_PATH_TO_CLONE_TO")
+	if os.Getenv("GHORG_PRESERVE_SCM_HOSTNAME") == "true" {
+		originalAbsolutePath := os.Getenv("GHORG_ORIGINAL_ABSOLUTE_PATH_TO_CLONE_TO")
+		statsFilePath = filepath.Join(originalAbsolutePath, "_ghorg_stats.csv")
+	} else {
+		statsFilePath = filepath.Join(absolutePath, "_ghorg_stats.csv")
+	}
+
+	return statsFilePath
+}
+
+func writeGhorgStats(date string, allReposToCloneCount, cloneCount, pulledCount, cloneInfosCount, cloneErrorsCount, updateRemoteCount, newCommits, pruneCount int, hasCollisions bool) error {
+
+	statsFilePath := getGhorgStatsFilePath()
+	fileExists := true
+
+	if _, err := os.Stat(statsFilePath); os.IsNotExist(err) {
+		fileExists = false
+	}
+
+	header := "datetime,clonePath,scm,cloneType,cloneTarget,totalCount,newClonesCount,existingResourcesPulledCount,dirSizeInMB,newCommits,cloneInfosCount,cloneErrorsCount,updateRemoteCount,pruneCount,hasCollisions,ghorgignore,ghorgVersion\n"
+
+	var file *os.File
+	var err error
+
+	if fileExists {
+		// Read the existing header
+		existingHeader, err := readFirstLine(statsFilePath)
+		if err != nil {
+			colorlog.PrintError(fmt.Sprintf("Error reading header from stats file: %v", err))
+			return err
+		}
+
+		// Check if the existing header is different from the new header, need to add a newline
+		if existingHeader+"\n" != header {
+			hashedHeader := fmt.Sprintf("%x", sha256.Sum256([]byte(header)))
+			newHeaderFilePath := filepath.Join(os.Getenv("GHORG_ABSOLUTE_PATH_TO_CLONE_TO"), fmt.Sprintf("ghorg_stats_new_header_%s.csv", hashedHeader))
+			// Create a new file with the new header
+			file, err = os.OpenFile(newHeaderFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				colorlog.PrintError(fmt.Sprintf("Error creating new header stats file: %v", err))
+				return err
+			}
+			if _, err := file.WriteString(header); err != nil {
+				colorlog.PrintError(fmt.Sprintf("Error writing new header to GHORG_STATS file: %v", err))
+				return err
+			}
+		} else {
+			// Open the existing file in append mode
+			file, err = os.OpenFile(statsFilePath, os.O_APPEND|os.O_WRONLY, 0644)
+			if err != nil {
+				colorlog.PrintError(fmt.Sprintf("Error opening stats file for appending: %v", err))
+				return err
+			}
+		}
+	} else {
+		// Create the file and write the header
+		file, err = os.OpenFile(statsFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			colorlog.PrintError(fmt.Sprintf("Error creating stats file: %v", err))
+			return err
+		}
+		if _, err := file.WriteString(header); err != nil {
+			colorlog.PrintError(fmt.Sprintf("Error writing header to GHORG_STATS file: %v", err))
+			return err
+		}
+	}
+	defer file.Close()
+
+	data := fmt.Sprintf("%v,%v,%v,%v,%v,%v,%v,%v,%.2f,%v,%v,%v,%v,%v,%v,%v,%v\n",
+		date,
+		outputDirAbsolutePath,
+		os.Getenv("GHORG_SCM_TYPE"),
+		os.Getenv("GHORG_CLONE_TYPE"),
+		targetCloneSource,
+		allReposToCloneCount,
+		cloneCount,
+		pulledCount,
+		cachedDirSizeMB,
+		newCommits,
+		cloneInfosCount,
+		cloneErrorsCount,
+		updateRemoteCount,
+		pruneCount,
+		hasCollisions,
+		configs.GhorgIgnoreDetected(),
+		GetVersion())
+	if _, err := file.WriteString(data); err != nil {
+		colorlog.PrintError(fmt.Sprintf("Error writing data to GHORG_STATS file: %v", err))
+		return err
+	}
+
+	return nil
+}
+
+func readFirstLine(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	if scanner.Scan() {
+		return scanner.Text(), nil
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+
+	return "", nil
+}
+
+func printFinishedWithDirSize() {
+	dirSizeMB, err := getCachedOrCalculatedOutputDirSizeInMb()
+	if err != nil {
+		if os.Getenv("GHORG_DEBUG") == "true" {
+			colorlog.PrintError(fmt.Sprintf("Error calculating directory size: %v", err))
+		}
+		colorlog.PrintSuccess(fmt.Sprintf("\nFinished! %s", outputDirAbsolutePath))
+		return
+	}
+
+	if dirSizeMB > 1000 {
+		dirSizeGB := dirSizeMB / 1000
+		colorlog.PrintSuccess(fmt.Sprintf("\nFinished! %s (Size: %.2f GB)", outputDirAbsolutePath, dirSizeGB))
+	} else {
+		colorlog.PrintSuccess(fmt.Sprintf("\nFinished! %s (Size: %.2f MB)", outputDirAbsolutePath, dirSizeMB))
+	}
+}
+
+func getCachedOrCalculatedOutputDirSizeInMb() (float64, error) {
+	if !isDirSizeCached {
+		dirSizeMB, err := utils.CalculateDirSizeInMb(outputDirAbsolutePath)
+		if err != nil {
+			return 0, err
+		}
+		cachedDirSizeMB = dirSizeMB
+		isDirSizeCached = true
+	}
+	return cachedDirSizeMB, nil
+}
+
+func filterByTargetReposPath(cloneTargets []scm.Repo) []scm.Repo {
+
+	_, err := os.Stat(os.Getenv("GHORG_TARGET_REPOS_PATH"))
+
+	if err != nil {
+		colorlog.PrintErrorAndExit(fmt.Sprintf("Error finding your GHORG_TARGET_REPOS_PATH file, error: %v", err))
+	}
+
+	if !os.IsNotExist(err) {
+		// Open the file parse each line and remove cloneTargets containing
+		toTarget, err := readTargetReposFile()
+		if err != nil {
+			colorlog.PrintErrorAndExit(fmt.Sprintf("Error parsing your GHORG_TARGET_REPOS_PATH file, error: %v", err))
+		}
+
+		colorlog.PrintInfo("Using GHORG_TARGET_REPOS_PATH, filtering repos down...")
+
+		filteredCloneTargets := []scm.Repo{}
+		var flag bool
+
+		targetRepoSeenOnOrg := make(map[string]bool)
+
+		for _, cloneTarget := range cloneTargets {
+			flag = false
+			for _, targetRepo := range toTarget {
+				if _, ok := targetRepoSeenOnOrg[targetRepo]; !ok {
+					targetRepoSeenOnOrg[targetRepo] = false
+				}
+				clonedRepoName := strings.TrimSuffix(filepath.Base(cloneTarget.URL), ".git")
+				if strings.EqualFold(clonedRepoName, targetRepo) {
+					flag = true
+					targetRepoSeenOnOrg[targetRepo] = true
+				}
+
+				if os.Getenv("GHORG_CLONE_WIKI") == "true" {
+					targetRepoWiki := targetRepo + ".wiki"
+					if strings.EqualFold(targetRepoWiki, clonedRepoName) {
+						flag = true
+						targetRepoSeenOnOrg[targetRepo] = true
+					}
+				}
+
+				if os.Getenv("GHORG_CLONE_SNIPPETS") == "true" {
+					if cloneTarget.IsGitLabSnippet {
+						targetSnippetOriginalRepo := strings.TrimSuffix(filepath.Base(cloneTarget.GitLabSnippetInfo.URLOfRepo), ".git")
+						if strings.EqualFold(targetSnippetOriginalRepo, targetRepo) {
+							flag = true
+							targetRepoSeenOnOrg[targetRepo] = true
+						}
+					}
+				}
+			}
+
+			if flag {
+				filteredCloneTargets = append(filteredCloneTargets, cloneTarget)
+			}
+		}
+
+		// Print all the repos in the file that were not in the org so users know the entry is not being cloned
+		for targetRepo, seen := range targetRepoSeenOnOrg {
+			if !seen {
+				cloneInfos = append(cloneInfos, fmt.Sprintf("Target in GHORG_TARGET_REPOS_PATH was not found in the org, repo: %v", targetRepo))
+			}
+		}
+
+		cloneTargets = filteredCloneTargets
+
+	}
+
+	return cloneTargets
+}
+
+func pruneRepos(cloneTargets []scm.Repo) int {
+	count := 0
 	colorlog.PrintInfo("\nScanning for local clones that have been removed on remote...")
 
-	files, err := ioutil.ReadDir(outputDirAbsolutePath)
+	files, err := os.ReadDir(outputDirAbsolutePath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -801,6 +1296,7 @@ func pruneRepos(cloneTargets []scm.Repo) {
 				colorlog.PrintSubtleInfo(
 					fmt.Sprintf("Deleting %s", filepath.Join(outputDirAbsolutePath, f.Name())))
 				err = os.RemoveAll(filepath.Join(outputDirAbsolutePath, f.Name()))
+				count++
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -809,15 +1305,27 @@ func pruneRepos(cloneTargets []scm.Repo) {
 			}
 		}
 	}
+
+	return count
 }
 
-func printCloneStatsMessage(cloneCount, pulledCount, updateRemoteCount int) {
+func printCloneStatsMessage(cloneCount, pulledCount, updateRemoteCount, newCommits, untouchedPrunes int) {
 	if updateRemoteCount > 0 {
-		colorlog.PrintSuccess(fmt.Sprintf("New repos cloned: %v, existing repos pulled: %v, remotes updated: %v", cloneCount, pulledCount, updateRemoteCount))
+		colorlog.PrintSuccess(fmt.Sprintf("New clones: %v, existing resources pulled: %v, total new commits: %v, remotes updated: %v", cloneCount, pulledCount, newCommits, updateRemoteCount))
 		return
 	}
 
-	colorlog.PrintSuccess(fmt.Sprintf("New repos cloned: %v, existing repos pulled: %v", cloneCount, pulledCount))
+	if newCommits > 0 {
+		colorlog.PrintSuccess(fmt.Sprintf("New clones: %v, existing resources pulled: %v, total new commits: %v", cloneCount, pulledCount, newCommits))
+		return
+	}
+
+	if untouchedPrunes > 0 {
+		colorlog.PrintSuccess(fmt.Sprintf("New clones: %v, existing resources pulled: %v, total prunes: %v", cloneCount, pulledCount, untouchedPrunes))
+		return
+	}
+
+	colorlog.PrintSuccess(fmt.Sprintf("New clones: %v, existing resources pulled: %v", cloneCount, pulledCount))
 }
 
 func interactiveYesNoPrompt(prompt string) bool {
@@ -897,8 +1405,14 @@ func PrintConfigs() {
 	if os.Getenv("GHORG_CLONE_WIKI") == "true" {
 		colorlog.PrintInfo("* Wikis         : " + os.Getenv("GHORG_CLONE_WIKI"))
 	}
+	if os.Getenv("GHORG_CLONE_SNIPPETS") == "true" {
+		colorlog.PrintInfo("* Snippets      : " + os.Getenv("GHORG_CLONE_SNIPPETS"))
+	}
 	if configs.GhorgIgnoreDetected() {
 		colorlog.PrintInfo("* Ghorgignore   : " + configs.GhorgIgnoreLocation())
+	}
+	if os.Getenv("GHORG_TARGET_REPOS_PATH") != "" {
+		colorlog.PrintInfo("* Target Repos  : " + os.Getenv("GHORG_TARGET_REPOS_PATH"))
 	}
 	if os.Getenv("GHORG_MATCH_REGEX") != "" {
 		colorlog.PrintInfo("* Regex Match   : " + os.Getenv("GHORG_MATCH_REGEX"))
@@ -946,7 +1460,18 @@ func PrintConfigs() {
 		colorlog.PrintInfo("* Preserve Dir  : " + "true")
 	}
 
+	if os.Getenv("GHORG_GITHUB_APP_PEM_PATH") != "" {
+		colorlog.PrintInfo("* GH App Auth   : " + "true")
+	}
+
+	if os.Getenv("GHORG_CLONE_DEPTH") != "" {
+		colorlog.PrintInfo("* Clone Depth   : " + os.Getenv("GHORG_CLONE_DEPTH"))
+	}
+
 	colorlog.PrintInfo("* Config Used   : " + os.Getenv("GHORG_CONFIG"))
+	if os.Getenv("GHORG_STATS_ENABLED") == "true" {
+		colorlog.PrintInfo("* Stats Enabled : " + os.Getenv("GHORG_STATS_ENABLED"))
+	}
 	colorlog.PrintInfo("* Ghorg version : " + GetVersion())
 
 	colorlog.PrintInfo("*************************************")
@@ -972,16 +1497,61 @@ func setOutputDirName(argz []string) {
 
 	outputDirName = strings.ToLower(argz[0])
 
-	// If all-group is used set the parent folder to the name of the baseurl
-	if argz[0] == "all-groups" && os.Getenv("GHORG_SCM_BASE_URL") != "" {
-		u, err := url.Parse(os.Getenv("GHORG_SCM_BASE_URL"))
-		if err != nil {
-			return
+	if os.Getenv("GHORG_PRESERVE_SCM_HOSTNAME") != "true" {
+		// If all-group is used set the parent folder to the name of the baseurl
+		if argz[0] == "all-groups" && os.Getenv("GHORG_SCM_BASE_URL") != "" {
+			u, err := url.Parse(os.Getenv("GHORG_SCM_BASE_URL"))
+			if err != nil {
+				colorlog.PrintError(fmt.Sprintf("Error parsing GHORG_SCM_BASE_URL, clone may be affected, error: %v", err))
+			}
+			outputDirName = u.Hostname()
 		}
-		outputDirName = strings.TrimSuffix(strings.TrimPrefix(u.Host, "www."), ".com")
+
+		if argz[0] == "all-users" && os.Getenv("GHORG_SCM_BASE_URL") != "" {
+			u, err := url.Parse(os.Getenv("GHORG_SCM_BASE_URL"))
+			if err != nil {
+				colorlog.PrintError(fmt.Sprintf("Error parsing GHORG_SCM_BASE_URL, clone may be affected, error: %v", err))
+			}
+			outputDirName = u.Hostname()
+		}
 	}
 
 	if os.Getenv("GHORG_BACKUP") == "true" {
 		outputDirName = outputDirName + "_backup"
 	}
+}
+
+// filter repos down based on ghorgignore if one exists
+func filterByGhorgignore(cloneTargets []scm.Repo) []scm.Repo {
+
+	_, err := os.Stat(configs.GhorgIgnoreLocation())
+	if !os.IsNotExist(err) {
+		// Open the file parse each line and remove cloneTargets containing
+		toIgnore, err := readGhorgIgnore()
+		if err != nil {
+			colorlog.PrintErrorAndExit(fmt.Sprintf("Error parsing your ghorgignore, error: %v", err))
+		}
+
+		colorlog.PrintInfo("Using ghorgignore, filtering repos down...")
+
+		filteredCloneTargets := []scm.Repo{}
+		var flag bool
+		for _, cloned := range cloneTargets {
+			flag = false
+			for _, ignore := range toIgnore {
+				if strings.Contains(cloned.URL, ignore) {
+					flag = true
+				}
+			}
+
+			if !flag {
+				filteredCloneTargets = append(filteredCloneTargets, cloned)
+			}
+		}
+
+		cloneTargets = filteredCloneTargets
+
+	}
+
+	return cloneTargets
 }

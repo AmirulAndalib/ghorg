@@ -17,7 +17,7 @@ type BranchRestrictions struct {
 
 func (b *BranchRestrictions) Gets(bo *BranchRestrictionsOptions) (interface{}, error) {
 	urlStr := b.c.requestUrl("/repositories/%s/%s/branch-restrictions", bo.Owner, bo.RepoSlug)
-	return b.c.executePaginated("GET", urlStr, "")
+	return b.c.executePaginated("GET", urlStr, "", nil)
 }
 
 func (b *BranchRestrictions) Create(bo *BranchRestrictionsOptions) (*BranchRestrictions, error) {
@@ -26,7 +26,7 @@ func (b *BranchRestrictions) Create(bo *BranchRestrictionsOptions) (*BranchRestr
 		return nil, err
 	}
 	urlStr := b.c.requestUrl("/repositories/%s/%s/branch-restrictions", bo.Owner, bo.RepoSlug)
-	response, err := b.c.execute("POST", urlStr, data)
+	response, err := b.c.executeWithContext("POST", urlStr, data, bo.ctx)
 	if err != nil {
 		return nil, err
 	}

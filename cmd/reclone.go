@@ -1,9 +1,7 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"strings"
@@ -22,11 +20,8 @@ var reCloneCmd = &cobra.Command{
 }
 
 type ReClone struct {
-	Cmd string `yaml:"cmd"`
-}
-
-func isVerboseReClone() bool {
-	return os.Getenv("GHORG_RECLONE_VERBOSE") == "true"
+	Cmd         string `yaml:"cmd"`
+	Description string `yaml:"description"`
 }
 
 func isQuietReClone() bool {
@@ -40,16 +35,16 @@ func reCloneFunc(cmd *cobra.Command, argz []string) {
 		os.Setenv("GHORG_RECLONE_PATH", path)
 	}
 
-	if cmd.Flags().Changed("verbose") {
-		os.Setenv("GHORG_RECLONE_VERBOSE", "true")
-	}
-
 	if cmd.Flags().Changed("quiet") {
 		os.Setenv("GHORG_RECLONE_QUIET", "true")
 	}
 
+	if cmd.Flags().Changed("env-config-only") {
+		os.Setenv("GHORG_RECLONE_ENV_CONFIG_ONLY", "true")
+	}
+
 	path := configs.GhorgReCloneLocation()
-	yamlBytes, err := ioutil.ReadFile(path)
+	yamlBytes, err := os.ReadFile(path)
 	if err != nil {
 		colorlog.PrintErrorAndExit(fmt.Sprintf("ERROR: parsing reclone.yaml, error: %v", err))
 	}
@@ -61,20 +56,33 @@ func reCloneFunc(cmd *cobra.Command, argz []string) {
 		colorlog.PrintErrorAndExit(fmt.Sprintf("ERROR: unmarshaling reclone.yaml, error:%v", err))
 	}
 
-	if !isVerboseReClone() && !isQuietReClone() {
-		asciiTime()
+	if cmd.Flags().Changed("list") {
+		colorlog.PrintInfo("**************************************************************")
+		colorlog.PrintInfo("**** Available reclone commands and optional descriptions ****")
+		colorlog.PrintInfo("**************************************************************")
+		fmt.Println("")
+		for key, value := range mapOfReClones {
+			colorlog.PrintInfo(fmt.Sprintf("- %s", key))
+			if value.Description != "" {
+				colorlog.PrintSubtleInfo(fmt.Sprintf("    description: %s", value.Description))
+			}
+			colorlog.PrintSubtleInfo(fmt.Sprintf("    cmd: %s", value.Cmd))
+			fmt.Println("")
+		}
+		os.Exit(0)
 	}
 
 	if len(argz) == 0 {
-		for _, key := range mapOfReClones {
-			runReClone(key)
+		for rcIdentifier, reclone := range mapOfReClones {
+			runReClone(reclone, rcIdentifier)
 		}
 	} else {
-		for _, arg := range argz {
-			if _, ok := mapOfReClones[arg]; !ok {
-				colorlog.PrintErrorAndExit(fmt.Sprintf("ERROR: The key %v was not found in reclone.yaml", arg))
+		for _, rcIdentifier := range argz {
+			if _, ok := mapOfReClones[rcIdentifier]; !ok {
+				colorlog.PrintErrorAndExit(fmt.Sprintf("ERROR: The key %v was not found in reclone.yaml", rcIdentifier))
+			} else {
+				runReClone(mapOfReClones[rcIdentifier], rcIdentifier)
 			}
-			runReClone(mapOfReClones[arg])
 		}
 	}
 
@@ -85,7 +93,7 @@ func printFinalOutput(argz []string, reCloneMap map[string]ReClone) {
 	fmt.Println("")
 	colorlog.PrintSuccess("Completed! The following reclones were ran successfully...")
 	if len(argz) == 0 {
-		for key, _ := range reCloneMap {
+		for key := range reCloneMap {
 			colorlog.PrintSuccess(fmt.Sprintf("  * %v", key))
 		}
 	} else {
@@ -123,7 +131,7 @@ func sanitizeCmd(cmd string) string {
 	return cmd
 }
 
-func runReClone(rc ReClone) {
+func runReClone(rc ReClone, rcIdentifier string) {
 	// make sure command starts with ghorg clone
 	splitCommand := strings.Split(rc.Cmd, " ")
 	ghorg, clone, remainingCommand := splitCommand[0], splitCommand[1], splitCommand[1:]
@@ -135,7 +143,13 @@ func runReClone(rc ReClone) {
 	safeToLogCmd := sanitizeCmd(strings.Clone(rc.Cmd))
 
 	if !isQuietReClone() {
-		colorlog.PrintInfo(fmt.Sprintf("$ %v", safeToLogCmd))
+		fmt.Println("")
+		colorlog.PrintInfo(fmt.Sprintf("Running reclone: %v", rcIdentifier))
+		if rc.Description != "" {
+			colorlog.PrintInfo(fmt.Sprintf("Description: %v", rc.Description))
+			fmt.Println("")
+		}
+		colorlog.PrintInfo(fmt.Sprintf("> %v", safeToLogCmd))
 	}
 
 	ghorgClone := exec.Command("ghorg", remainingCommand...)
@@ -147,42 +161,43 @@ func runReClone(rc ReClone) {
 	os.Setenv("GHORG_RECLONE_RUNNING", "true")
 	defer os.Setenv("GHORG_RECLONE_RUNNING", "false")
 
-	// have to unset all ghorg envs because root command will set them on initialization of ghorg cmd
-	for _, e := range os.Environ() {
-		keyValue := strings.SplitN(e, "=", 2)
-		env := keyValue[0]
-		ghorgEnv := strings.HasPrefix(env, "GHORG_")
+	if os.Getenv("GHORG_RECLONE_ENV_CONFIG_ONLY") == "false" {
+		// have to unset all ghorg envs because root command will set them on initialization of ghorg cmd
+		for _, e := range os.Environ() {
+			keyValue := strings.SplitN(e, "=", 2)
+			env := keyValue[0]
+			ghorgEnv := strings.HasPrefix(env, "GHORG_")
 
-		// skip global flags and reclone flags which are set in the conf.yaml
-		if env == "GHORG_COLOR" || env == "GHORG_CONFIG" || env == "GHORG_RECLONE_VERBOSE" || env == "GHORG_RECLONE_QUIET" || env == "GHORG_RECLONE_PATH" || env == "GHORG_RECLONE_RUNNING" {
-			continue
-		}
-		if ghorgEnv {
-			os.Unsetenv(env)
+			// skip global flags and reclone flags which are set in the conf.yaml
+			if env == "GHORG_COLOR" || env == "GHORG_CONFIG" || env == "GHORG_RECLONE_QUIET" || env == "GHORG_RECLONE_PATH" || env == "GHORG_RECLONE_RUNNING" {
+				continue
+			}
+			if ghorgEnv {
+				os.Unsetenv(env)
+			}
 		}
 	}
 
-	stdout, err := ghorgClone.StdoutPipe()
-	if err != nil {
-		colorlog.PrintErrorAndExit(fmt.Sprintf("ERROR: Problem with piping to stdout, err: %v", err))
+	// Connect ghorgClone's stdout and stderr to the current process's stdout and stderr
+	if !isQuietReClone() {
+		ghorgClone.Stdout = os.Stdout
+		ghorgClone.Stderr = os.Stderr
+	} else {
+		spinningSpinner.Start()
+		defer spinningSpinner.Stop()
+		ghorgClone.Stdout = nil
+		ghorgClone.Stderr = nil
 	}
 
-	err = ghorgClone.Start()
-
+	err := ghorgClone.Start()
 	if err != nil {
+		spinningSpinner.Stop()
 		colorlog.PrintErrorAndExit(fmt.Sprintf("ERROR: Starting ghorg clone cmd: %v, err: %v", safeToLogCmd, err))
-	}
-
-	if isVerboseReClone() && !isQuietReClone() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			m := scanner.Text()
-			fmt.Println(m)
-		}
 	}
 
 	err = ghorgClone.Wait()
 	if err != nil {
+		spinningSpinner.Stop()
 		colorlog.PrintErrorAndExit(fmt.Sprintf("ERROR: Running ghorg clone cmd: %v, err: %v", safeToLogCmd, err))
 	}
 }

@@ -24,40 +24,41 @@ Use ghorg to quickly clone all of an orgs, or users repos into a single director
 
 ## Supported Providers
 - GitHub (Self Hosted & Cloud)
-  - [Install](https://github.com/gabrie30/ghorg#install) | [Setup](https://github.com/gabrie30/ghorg#github-setup) | [Examples](https://github.com/gabrie30/ghorg/blob/master/examples/github.md)
+  - [Install](https://github.com/gabrie30/ghorg#installation) | [Setup](https://github.com/gabrie30/ghorg#github-setup) | [Examples](https://github.com/gabrie30/ghorg/blob/master/examples/github.md)
 - GitLab (Self Hosted & Cloud)
-  - [Install](https://github.com/gabrie30/ghorg#install) | [Setup](https://github.com/gabrie30/ghorg#gitlab-setup)  | [Examples](https://github.com/gabrie30/ghorg/blob/master/examples/gitlab.md)
+  - [Install](https://github.com/gabrie30/ghorg#installation) | [Setup](https://github.com/gabrie30/ghorg#gitlab-setup)  | [Examples](https://github.com/gabrie30/ghorg/blob/master/examples/gitlab.md)
 - Bitbucket (Cloud Only)
-  - [Install](https://github.com/gabrie30/ghorg#install) | [Setup](https://github.com/gabrie30/ghorg#bitbucket-setup)  | [Examples](https://github.com/gabrie30/ghorg/blob/master/examples/bitbucket.md)
+  - [Install](https://github.com/gabrie30/ghorg#installation) | [Setup](https://github.com/gabrie30/ghorg#bitbucket-setup)  | [Examples](https://github.com/gabrie30/ghorg/blob/master/examples/bitbucket.md)
 - Gitea (Self Hosted Only)
-  - [Install](https://github.com/gabrie30/ghorg#install) | [Setup](https://github.com/gabrie30/ghorg#gitea-setup)  | [Examples](https://github.com/gabrie30/ghorg/blob/master/examples/gitea.md)
+  - [Install](https://github.com/gabrie30/ghorg#installation) | [Setup](https://github.com/gabrie30/ghorg#gitea-setup)  | [Examples](https://github.com/gabrie30/ghorg/blob/master/examples/gitea.md)
 
 > The terminology used in ghorg is that of GitHub, mainly orgs/repos. GitLab and BitBucket use different terminology. There is a handy chart thanks to GitLab that translates terminology [here](https://about.gitlab.com/images/blogimages/gitlab-terminology.png). Note, some features may be different for certain providers.
 
-## Configuration
+## High Level Features
 
-Precedence for configuration is first given to the flags set on the command-line, then to what's set in your `$HOME/.config/ghorg/conf.yaml`. This file comes from the [sample-conf.yaml](https://github.com/gabrie30/ghorg/blob/master/sample-conf.yaml).
-
-If no configuration is found ghorg will use its defaults and try to clone a GitHub Org, however an api token is always required.
-
-You can have multiple configuration files which is useful if you clone from multiple SCM providers with different tokens and settings. Alternative configuration files can only be referenced as a command-line flag `--config`.
-
-If you have multiple different orgs/users/configurations to clone see the `ghorg reclone` command as a way to manage them.
-
-Note: ghorg will respect the `XDG_CONFIG_HOME` [environment variable](https://wiki.archlinux.org/title/XDG_Base_Directory) if set.
-
-## Windows support
-
-Windows is supported when built with golang or as a [prebuilt binary](https://github.com/gabrie30/ghorg/releases/latest) however, the readme and other documentation is not geared towards Windows users.
-
-Alternatively, Windows users can also install ghorg using [scoop](https://scoop.sh/#/)
-
-  ```
-  scoop bucket add main
-  scoop install ghorg
-  ```
+- [Filter](#selective-repository-cloning) or select specific repositories for cloning
+- Create [backups](#creating-backups) of repositories
+- Simplify complex clone commands using [reclone](#reclone-command) shortcuts
+- Initiate clone operations via [HTTP server](#reclone-server-command)
+- Schedule cloning tasks using [cron](#reclone-cron-command)
+- Monitor and track clone [metrics](#tracking-clone-data-over-time) over time
 
 ## Installation
+
+There are a installation methods available, please choose the one that suits your fancy:
+- [Prebuilt Binaries](#prebuilt-binaries)
+- [Homebrew](#homebrew)
+- [Golang](#golang)
+- [Docker](#docker)
+- [Windows Support](#windows-support)
+
+For each installation method, optionally create a ghorg configuration file. See the [configuration](#configuration) section for more details.
+
+```bash
+mkdir -p $HOME/.config/ghorg
+curl https://raw.githubusercontent.com/gabrie30/ghorg/master/sample-conf.yaml > $HOME/.config/ghorg/conf.yaml
+vi $HOME/.config/ghorg/conf.yaml # To update your configuration
+```
 
 ### Prebuilt Binaries
 
@@ -67,34 +68,15 @@ See [latest release](https://github.com/gabrie30/ghorg/releases/latest) to downl
 - Windows
 - Linux
 
-If you don't know which to choose its likely going to be the x86_64 version for your operating system
+If you don't know which to choose its likely going to be the x86_64 version for your operating system.
 
 ### Homebrew
-
-> optional but recommended
-
-```bash
-mkdir -p $HOME/.config/ghorg
-curl https://raw.githubusercontent.com/gabrie30/ghorg/master/sample-conf.yaml > $HOME/.config/ghorg/conf.yaml
-vi $HOME/.config/ghorg/conf.yaml # To update your configuration
-```
-> required
 
 ```bash
 brew install gabrie30/utils/ghorg
 ```
 
 ### Golang
-
-> optional but recommended
-
-```bash
-mkdir -p $HOME/.config/ghorg
-curl https://raw.githubusercontent.com/gabrie30/ghorg/master/sample-conf.yaml > $HOME/.config/ghorg/conf.yaml
-vi $HOME/.config/ghorg/conf.yaml # To update your configuration
-```
-
-> required
 
 ```bash
 # ensure $HOME/go/bin is in your path ($ echo $PATH | grep $HOME/go/bin)
@@ -106,64 +88,58 @@ go install github.com/gabrie30/ghorg@latest
 go get github.com/gabrie30/ghorg
 ```
 
+## Configuration
+
+Precedence for configuration is first given to the flags set on the command-line, then to what's set in your `$HOME/.config/ghorg/conf.yaml`. This file comes from the [sample-conf.yaml](https://github.com/gabrie30/ghorg/blob/master/sample-conf.yaml) and can be installed by performing the following.
+
+```bash
+mkdir -p $HOME/.config/ghorg
+curl https://raw.githubusercontent.com/gabrie30/ghorg/master/sample-conf.yaml > $HOME/.config/ghorg/conf.yaml
+vi $HOME/.config/ghorg/conf.yaml # To update your configuration
+```
+
+If no configuration file is found ghorg will use its defaults and try to clone a GitHub Org, however an api token is always required.
+
+You can have multiple configuration files which is useful if you clone from multiple SCM providers with different tokens and settings. Alternative configuration files can only be referenced as a command-line flag `--config`.
+
+If you have multiple different orgs/users/configurations to clone see the `ghorg reclone` command as a way to manage them.
+
+Note: ghorg will respect the `XDG_CONFIG_HOME` [environment variable](https://wiki.archlinux.org/title/XDG_Base_Directory) if set.
+
 ## SCM Provider Setup
 
 > Note: if you are running into issues, read the troubleshooting and known issues section below
 
 ### GitHub Setup
-1. Create [Personal Access Token](https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line) with all `repo` scopes. Update `GHORG_GITHUB_TOKEN` in your `ghorg/conf.yaml` or as a cli flag. If your org has Saml SSO in front you will need to give your token those permissions as well, see [this doc](https://docs.github.com/en/github/authenticating-to-github/authenticating-with-saml-single-sign-on/authorizing-a-personal-access-token-for-use-with-saml-single-sign-on).
+1. Create [Personal Access Token](https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line) with all `repo` scopes. Update `GHORG_GITHUB_TOKEN` in your `ghorg/conf.yaml` or as a cli flag or place it in a file and add the path to `GHORG_GITHUB_TOKEN`. If your org has Saml SSO in front you will need to give your token those permissions as well, see [this doc](https://docs.github.com/en/github/authenticating-to-github/authenticating-with-saml-single-sign-on/authorizing-a-personal-access-token-for-use-with-saml-single-sign-on).
 1. For cloning GitHub Enterprise (self hosted github instances) repos you must set `--base-url` e.g. `ghorg clone <github_org> --base-url=https://internal.github.com`
 1. See [examples/github.md](https://github.com/gabrie30/ghorg/blob/master/examples/github.md) on how to run
+
+#### GitHub App Authentication (Advanced)
+
+1. [Create a GitHub App](https://docs.github.com/en/apps/creating-github-apps/setting-up-a-github-app/creating-a-github-app) in your Organization. You only need to fill out the required fields. Make sure to give Repository Permissions ->  contents -> read only permissions
+1. Install the GitHub App into your Organization
+1. Generate a a private key from the GitHub App, set the location of the key to `GHORG_GITHUB_APP_PEM_PATH`
+1. Locate the GitHub App ID from the GitHub App, set the value to `GHORG_GITHUB_APP_ID`
+1. Locate the GitHub Installation ID from the URL of the GitHub app, set the value to `GHORG_GITHUB_APP_INSTALLATION_ID`. NOTE: you will need to use the actual GitHub url to get this ID, go to your GitHub Organization Settings Page -> Third Party Access -> GitHub Apps -> Configure -> Get ID from URL
 
 ### GitLab Setup
 
 1. Create [Personal Access Token](https://docs.gitlab.com/ee/user/profile/personal_access_tokens.html) with the `read_api` scope (or `api` for self-managed GitLab older than 12.10). This token can be added to your `ghorg/conf.yaml` or as a cli flag.
-1. Update the `GitLab Specific` config in your `ghorg/conf.yaml` or via cli flags
+1. Update the `GitLab Specific` config in your `ghorg/conf.yaml` or via cli flags or place it in a file and add the path to `GHORG_GITLAB_TOKEN`
 1. Update `GHORG_SCM_TYPE` to `gitlab` in your `ghorg/conf.yaml` or via cli flags
 1. See [examples/gitlab.md](https://github.com/gabrie30/ghorg/blob/master/examples/gitlab.md) on how to run
-
-#### GitLab Specific Notes
-
-1. With GitLab, if ghorg detects repo naming collisions with repos being cloned from different groups/subgroups, ghorg will automatically append the group/subgroup path to the repo name. You will be notified in the output if this occurs.
-
-1. There are different commands for hosted gitlab instances vs gitlab cloud read below for the differences.
-
-##### Hosted GitLab Instances
-
-1. To clone all the groups at once use the keyword "all-groups". Note, all-groups requires a GitLab 13.0.1 or greater and will only clone from groups/repos your user has permissions to.
-
-    ```sh
-    $ ghorg clone all-groups --base-url=https://${your.hosted.gitlab.com} --scm=gitlab --token=XXXX --preserve-dir
-    ```
-
-1. For all versions of GitLab you can clone groups or sub groups individually
-
-    ```sh
-    # cloning a top level group
-    $ ghorg clone mygroup --base-url=https://${your.hosted.gitlab.com} --scm=gitlab --token=XXXX --preserve-dir
-
-    # cloning a subgroup
-    $ ghorg clone mygroup/mysubgroup --base-url=https://${your.hosted.gitlab.com} --scm=gitlab --token=XXXX --preserve-dir
-    ```
-
-1. You must set `--base-url` which is the url to your instance. If your instance requires an insecure connection you can use the `--insecure-gitlab-client` flag
-
-##### GitLab Cloud
-
-To clone all repos you can use the top level group name e.g. to clone `gitlab-examples` on GitLab cloud https://gitlab.com/gitlab-examples
-
-```sh
-$ ghorg clone gitlab-examples --scm=gitlab --token=XXXX --preserve-dir
-```
 
 ### Gitea Setup
 
 1. Create [Access Token](https://docs.gitea.io/en-us/api-usage/) (Settings -> Applications -> Generate Token)
-1. Update `GHORG_GITEA_TOKEN` in your `ghorg/conf.yaml` or use the (--token, -t) flag.
+1. Update `GHORG_GITEA_TOKEN` in your `ghorg/conf.yaml` or use the (--token, -t) flag or place it in a file and add the path to `GHORG_GITEA_TOKEN`.
 1. Update `GHORG_SCM_TYPE` to `gitea` in your `ghorg/conf.yaml` or via cli flags
 1. See [examples/gitea.md](https://github.com/gabrie30/ghorg/blob/master/examples/gitea.md) on how to run
 
 ### Bitbucket Setup
+
+> Note: ghorg only supports bitbucket cloud, it does not support self hosted instances at this time
 
 #### App Passwords
 
@@ -181,11 +157,12 @@ $ ghorg clone gitlab-examples --scm=gitlab --token=XXXX --preserve-dir
 
 ## How to Use
 
-See [examples](https://github.com/gabrie30/ghorg/tree/master/examples) dir for more SCM specific docs
+See [examples](https://github.com/gabrie30/ghorg/tree/master/examples) directory for more SCM specific docs or use the examples command e.g. `ghorg examples gitlab`
 
 ```bash
-# note: to view/set all available flags/features see sample-conf.yaml
 $ ghorg clone kubernetes --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2
+# Example how to use --token with a file path
+$ ghorg clone kubernetes --token=~/.config/ghorg/gitlab-token.txt
 $ ghorg clone davecheney --clone-type=user --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2
 $ ghorg clone gitlab-examples --scm=gitlab --preserve-dir --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2
 $ ghorg clone gitlab-examples/wayne-enterprises --scm=gitlab --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2
@@ -194,25 +171,7 @@ $ ghorg clone --help
 # view cloned resources
 $ ghorg ls
 $ ghorg ls someorg
-```
-
-### With Docker
-
-> This is only recommended for testing due to resource constraints
-
-1. Clone repo then `cd ghorg`
-1. Build the image `docker build . -t ghorg-docker`
-1. Run in docker
-
-```bash
-# using your local ghorg configuration file, cloning in container
-docker run -v $HOME/.config/ghorg:/root/.config/ghorg ghorg-docker ghorg clone kubernetes
-
-# using flags, cloning in container
-docker run ghorg-docker ghorg clone kubernetes --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2
-
-# using flags, cloning to your machine
-docker run -v $HOME/ghorg/:/root/ghorg/ ghorg-docker ghorg clone kubernetes --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2 --output-dir=cloned-from-docker
+$ ghorg ls someorg | xargs -I %s mv %s bar/
 ```
 
 ## Changing Clone Directories
@@ -249,14 +208,14 @@ docker run -v $HOME/ghorg/:/root/ghorg/ ghorg-docker ghorg clone kubernetes --to
         ├── sig-security
         └── sig-testing
     ```
-## Filtering Repos
+## Selective Repository Cloning
 - To only clone repos that match regex use `--match-regex` flag or exclude cloning repos that match regex with `--exclude-match-regex`
 - To only clone repos that match prefix(s) use `--match-prefix` flag or exclude cloning repos that match prefix(s) with `--exclude-match-prefix`
 - To filter out any archived repos while cloning use the `--skip-archived` flag (not bitbucket)
 - To filter out any forked repos while cloning use the `--skip-forks` flag
 - Filter by specific repo [topics](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/classifying-your-repository-with-topics) `GHORG_TOPICS` or `--topics` will clone only repos with a matching topic. GitHub/GitLab/Gitea only
-- To ignore specific repos create a `ghorgignore` file inside `$HOME/.config/ghorg`. Each line in this file is considered a substring and will be compared against each repos clone url. If the clone url contains a substring in the `ghorgignore` it will be excluded from cloning. To prevent accidentally excluding a repo, you should make each line as specific as possible, eg. `https://github.com/gabrie30/ghorg.git` or `git@github.com:gabrie30/ghorg.git` depending on how you clone. This is useful for permanently ignoring certain repos.
-
+- To clone a specific set of repositories, create a file listing the names of these repositories, one per line. Then, use the `GHORG_TARGET_REPOS` or `--target-repos-path` flag to specify the path to this file.
+- To exclude specific repositories from being cloned, you can create a `ghorgignore` file in the `$HOME/.config/ghorg` directory. Each line in this file should contain a unique identifier of the repository, which is considered a substring. This substring is then compared against each repository's clone URL during the cloning process. If the clone URL contains the substring listed in the `ghorgignore` file, that repository will be skipped and not cloned. To avoid unintentionally excluding a repository, ensure that each line in the `ghorgignore` file is as specific as possible. For instance, you could use `https://github.com/gabrie30/ghorg.git` or `git@github.com:gabrie30/ghorg.git`, depending on your cloning method. This feature is particularly useful for permanently excluding certain repositories from the cloning process. If you wish to use multiple `ghorgignore` files or store them in a different location, you can use the `--ghorgignore-path` flag to specify an alternative path.
   ```bash
   # Create ghorgignore
   touch $HOME/.config/ghorg/ghorgignore
@@ -288,15 +247,7 @@ git checkout master
 
 The `ghorg reclone` command is a way to store all your `ghorg clone` commands in one configuration file and makes calling long or multiple `ghorg clone` commands easier.
 
-Once your [reclone.yaml](https://github.com/gabrie30/ghorg/blob/master/sample-reclone.yaml) configuration is set you can call `ghorg reclone` to clone each entry individually or clone all at once.
-
-To use, add a [reclone.yaml](https://github.com/gabrie30/ghorg/blob/master/sample-reclone.yaml) to your `$HOME/.config/ghorg` directory. You can use the following command to set it for you with examples to use as a template
-
-```
-curl https://raw.githubusercontent.com/gabrie30/ghorg/master/sample-reclone.yaml > $HOME/.config/ghorg/reclone.yaml
-```
-
-After updating your `reclone.yaml` you can run
+Once your [reclone.yaml](https://github.com/gabrie30/ghorg/blob/master/sample-reclone.yaml) configuration is set you can call `ghorg reclone` to clone each entry individually or clone all at once, see examples below.
 
 ```
 # To clone all the entries in your reclone.yaml omit any arguments
@@ -308,9 +259,215 @@ ghorg reclone
 ghorg reclone kubernetes-sig-staging kubernetes-sig
 ```
 
+```
+# To view all your reclone commands
+# NOTE: This command prints tokens to stdout
+ghorg reclone --list
+```
+
 <p align="center">
   <img width="648" alt="ghorg reclone example" src="https://user-images.githubusercontent.com/1512282/183263986-50e56b86-12b9-479b-9c52-b1c74129228c.png">
 </p>
+
+#### Setup
+
+Add a [reclone.yaml](https://github.com/gabrie30/ghorg/blob/master/sample-reclone.yaml) to your `$HOME/.config/ghorg` directory. You can use the following command to set it for you with examples to use as a template
+
+```
+curl https://raw.githubusercontent.com/gabrie30/ghorg/master/sample-reclone.yaml > $HOME/.config/ghorg/reclone.yaml
+```
+
+Update file with the commands you wish to run.
+
+## Reclone Server Command
+
+The `reclone-server` command starts a server that allows you to trigger ad hoc reclone commands via HTTP requests.
+
+### Usage
+
+```sh
+ghorg reclone-server [flags]
+```
+
+### Flags
+
+- `--port`: Specify the port on which the server will run. If not specified, the server will use the default port.
+
+### Endpoints
+
+- **`/trigger/reclone`**: Triggers the reclone command. To prevent resource exhaustion, only one request can processed at a time.
+  - **Query Parameters**:
+    - `cmd`: Optional. Allows you to call a specific reclone, otherwise all reclones are ran.
+  - **Responses**:
+    - `200 OK`: Command started successfully.
+    - `429 Too Many Requests`: Server is currently running a reclone command, you will need to wait until its completed before starting another one.
+
+- **`/stats`**: Returns the statistics of the reclone operations in JSON format. `GHORG_STATS_ENABLED=true` or `--stats-enabled` must be set to work.
+  - **Responses**:
+    - `200 OK`: Statistics returned successfully.
+    - `428 Precondition required`: Ghorg stats is not enabled.
+    - `500 Internal Server Error`: Unable to read the statistics file.
+
+- **`/health`**: Health check endpoint.
+  - **Responses**:
+    - `200 OK`: Server is healthy.
+
+### Examples
+
+Starting the server. The default port is `8080` but you can optionally start the server on different port using the `--port` flag:
+
+```sh
+ghorg reclone-server
+```
+
+Trigger reclone command, this will run all cmds defined in your `reclone.yaml`:
+
+```sh
+curl "http://localhost:8080/trigger/reclone"
+```
+
+Trigger a specific reclone command:
+
+```sh
+curl "http://localhost:8080/trigger/reclone?cmd=your-reclone-command"
+```
+
+Get the statistics:
+
+```sh
+curl "http://localhost:8080/stats"
+```
+
+Check the server health:
+
+```sh
+curl "http://localhost:8080/health"
+```
+
+## Reclone Cron Command
+
+The `reclone-cron` command sets up a simple cron job that triggers the reclone command at specified minute intervals indefinitely.
+
+### Usage
+
+```sh
+ghorg reclone-cron [flags]
+```
+
+### Flags
+
+- `--minutes`: Specify the interval in minutes at which the reclone command will be triggered. Default is every 60 minutes.
+
+### Example
+
+Set up a cron job to trigger the reclone command every day:
+
+```sh
+ghorg reclone-cron --minutes 1440
+```
+
+### Environment Variables
+
+- `GHORG_CRON_TIMER_MINUTES`: The interval in minutes for the cron job. This can be set via the `--minutes` flag. Default is 60 minutes.
+
+## Using Docker
+
+The provided images are built for both `amd64` and `arm64` architectures and are available solely on Github Container Registry [ghcr.io](https://github.com/gabrie30/ghorg/pkgs/container/ghorg).
+
+```shell
+# Should print help message
+# You can also specify a version as the tag, such as ghcr.io/gabrie30/ghorg:v1.9.9
+docker run --rm ghcr.io/gabrie30/ghorg:latest
+```
+
+> Note: There are also tags available for the latest on trunk, such as `master` or `master-<commit SHA 7 chars>`, but these **are not recommended**.
+
+The commands for ghorg are parsed as docker commands. The entrypoint is the `ghorg` binary, hence you only need to enter remaining arguments as follows:
+
+```shell
+docker run --rm ghcr.io/gabrie30/ghorg \
+    clone kubernetes --token=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2
+```
+
+The image ships with the following environment variables set:
+
+```shell
+GHORG_CONFIG=/config/conf.yaml
+GHORG_RECLONE_PATH=/config/reclone.yaml
+GHORG_ABSOLUTE_PATH_TO_CLONE_TO=/data
+```
+
+These can be overriden, if necessary, by including the `-e` flag to the docker run comand, e.g. `-e GHORG_GITHUB_TOKEN=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2`.
+
+### Persisting Data on the Host
+
+In order to store data on the host, it is required to bind mount a volume:
+- `$HOME/.config/ghorg:/config`: Mounts your config directory inside the container, to access `config.yaml` and `reclone.yaml`.
+- `$HOME/repositories:/data`: Mounts your local data directory inside the container, where repos will be downloaded by default.
+
+```shell
+docker run --rm \
+        -e GHORG_GITHUB_TOKEN=bGVhdmUgYSBjb21tZW50IG9uIGlzc3VlIDY2 \
+        -v $HOME/.config/ghorg:/config `# optional` \
+        -v $HOME/repositories:/data \
+        ghcr.io/gabrie30/ghorg:latest \
+        clone kubernetes --match-regex=^sig
+```
+
+> Note: Altering `GHORG_ABSOLUTE_PATH_TO_CLONE_TO` will require changing the mount location from `/data` to the new location inside the container.
+
+A shell alias might make this more practical:
+
+```shell
+alias ghorg="docker run --rm -v $HOME/.config/ghorg:/config -v $HOME/repositories:/data ghcr.io/gabrie30/ghorg:latest"
+
+# Using the alias: creates and cleans up the container
+ghorg clone kubernetes --match-regex=^sig
+```
+
+## Tracking Clone Data Over Time
+
+To track data on your clones over time, you can use the ghorg stats feature. It is recommended to enable ghorg stats in your configuration file by setting `GHORG_STATS_ENABLED=true`. This ensures that each clone operation is logged automatically without needing to set the command line flag `--stats-enabled` every time. **The ghorg stats feature is disabled by default and needs to be enabled.**
+
+When ghorg stats is enabled, the CSV file `_ghorg_stats.csv` is created in the directory specified by `GHORG_ABSOLUTE_PATH_TO_CLONE_TO`. This file contains detailed information about each clone operation, which is useful for auditing and tracking purposes such as the size of the clone and the number of new commits over time.
+
+Below are the headers and their descriptions. Note that these headers may change over time. If there are any changes in the headers, a new file named `_ghorg_stats_new_header_${sha256HashOfHeader}.csv` will be created to prevent incorrect data from being added to your CSV.
+
+- **datetime**: Date and time of the clone in YYYY-MM-DD hh:mm:ss format
+- **clonePath**: Location of the clone directory
+- **scm**: Name of the source control used
+- **cloneType**: Either user or org clone
+- **cloneTarget**: What is specified after the clone command `ghorg clone <target>`
+- **totalCount**: Total number of resources expected to be cloned or pulled
+- **newClonesCount**: Sum of all new repos cloned
+- **existingResourcesPulledCount**: Sum of all repos that were pulled
+- **dirSizeInMB**: The size in megabytes of the output dir
+- **newCommits**: Sum of all new commits in all repos pulled
+- **cloneInfosCount**: Number of clone Info messages
+- **cloneErrorsCount**: Number of clone Issues/Errors
+- **updateRemoteCount**: Number of remotes updated
+- **pruneCount**: Number of repos pruned
+- **hasCollisions**: If there were any name collisions, only can happen with gitlab clones
+- **ghorgignore**: If a ghorgignore was used in the clone
+- **ghorgVersion**: Version of ghorg used in the clone
+
+#### Converting CSV to JSON
+
+```bash
+go install github.com/gabrie30/csvToJson@latest && \
+csvToJson _ghorg_stats.csv
+```
+
+## Windows support
+
+Windows is supported when built with golang or as a [prebuilt binary](https://github.com/gabrie30/ghorg/releases/latest) however, the readme and other documentation is not geared towards Windows users.
+
+Alternatively, Windows users can also install ghorg using [scoop](https://scoop.sh/#/)
+
+  ```
+  scoop bucket add main
+  scoop install ghorg
+  ```
 
 ## Troubleshooting
 
@@ -320,5 +477,5 @@ ghorg reclone kubernetes-sig-staging kubernetes-sig
 - If your GitHub Personal Access Token is only finding public repos, give your token all the repos permissions
 - Make sure your `$ git --version` is >= 2.19.0
 - Check for other software, such as anti-malware, that could interfere with ghorgs ability to create large number of connections, see [issue 132](https://github.com/gabrie30/ghorg/issues/132#issuecomment-889357960). You can also lower the concurrency with `--concurrency=n` default is 25.
-- To debug yourself you can call ghorg with the GHORG_DEBUG=true env e.g `GHORG_DEBUG=true ghorg clone kubernetes --concurrency=1`
+- To debug yourself you can call ghorg with the GHORG_DEBUG=true env e.g `GHORG_DEBUG=true ghorg clone kubernetes`. Note, when this env is set concurrency is set to a value of 1 and will expose the api key used to stdout.
 - If you've gotten this far and still have an issue feel free to raise an issue

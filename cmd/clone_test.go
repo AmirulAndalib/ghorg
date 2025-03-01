@@ -1,9 +1,9 @@
 package cmd
 
 import (
-	"io/ioutil"
 	"log"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -58,7 +58,7 @@ func NewMockGit() MockGitClient {
 }
 
 func (g MockGitClient) Clone(repo scm.Repo) error {
-	_, err := ioutil.TempDir(os.Getenv("GHORG_ABSOLUTE_PATH_TO_CLONE_TO"), repo.Name)
+	_, err := os.MkdirTemp(os.Getenv("GHORG_ABSOLUTE_PATH_TO_CLONE_TO"), repo.Name)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -97,9 +97,29 @@ func (g MockGitClient) FetchAll(repo scm.Repo) error {
 	return nil
 }
 
+func (g MockGitClient) FetchCloneBranch(repo scm.Repo) error {
+	return nil
+}
+
+func (g MockGitClient) RepoCommitCount(repo scm.Repo) (int, error) {
+	return 0, nil
+}
+
+func (g MockGitClient) Branch(repo scm.Repo) (string, error) {
+	return "", nil
+}
+
+func (g MockGitClient) RevListCompare(repo scm.Repo, ref1 string, ref2 string) (string, error) {
+	return "", nil
+}
+
+func (g MockGitClient) ShortStatus(repo scm.Repo) (string, error) {
+	return "", nil
+}
+
 func TestInitialClone(t *testing.T) {
 	defer UnsetEnv("GHORG_")()
-	dir, err := ioutil.TempDir("", "ghorg_test_initial")
+	dir, err := os.MkdirTemp("", "ghorg_test_initial")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -126,7 +146,7 @@ func TestInitialClone(t *testing.T) {
 
 func TestMatchPrefix(t *testing.T) {
 	defer UnsetEnv("GHORG_")()
-	dir, err := ioutil.TempDir("", "ghorg_test_match_prefix")
+	dir, err := os.MkdirTemp("", "ghorg_test_match_prefix")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -163,7 +183,7 @@ func TestMatchPrefix(t *testing.T) {
 
 func TestExcludeMatchPrefix(t *testing.T) {
 	defer UnsetEnv("GHORG_")()
-	dir, err := ioutil.TempDir("", "ghorg_test_exclude_match_prefix")
+	dir, err := os.MkdirTemp("", "ghorg_test_exclude_match_prefix")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -200,7 +220,7 @@ func TestExcludeMatchPrefix(t *testing.T) {
 
 func TestMatchRegex(t *testing.T) {
 	defer UnsetEnv("GHORG_")()
-	dir, err := ioutil.TempDir("", "ghorg_test_match_regex")
+	dir, err := os.MkdirTemp("", "ghorg_test_match_regex")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -238,7 +258,7 @@ func TestMatchRegex(t *testing.T) {
 func TestExcludeMatchRegex(t *testing.T) {
 	defer UnsetEnv("GHORG_")()
 	testDescriptor := "ghorg_test_exclude_match_regex"
-	dir, err := ioutil.TempDir("", testDescriptor)
+	dir, err := os.MkdirTemp("", testDescriptor)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -326,5 +346,116 @@ func UnsetEnv(prefix string) (restore func()) {
 				os.Setenv(k, v)
 			}
 		}
+	}
+}
+
+func Test_filterWithGhorgignore(t *testing.T) {
+	type testCase struct {
+		name           string
+		cloneTargets   []scm.Repo
+		expectedResult []scm.Repo
+	}
+
+	testCases := []testCase{
+		{
+			name: "filters out repo named 'shouldbeignored'",
+			cloneTargets: []scm.Repo{
+				{Name: "shouldbeignored", URL: "https://github.com/org/shouldbeignored"},
+				{Name: "bar", URL: "https://github.com/org/bar"},
+			},
+			expectedResult: []scm.Repo{
+				{Name: "bar", URL: "https://github.com/org/bar"},
+			},
+		},
+		{
+			name: "filters out repo named 'shouldbeignored'",
+			cloneTargets: []scm.Repo{
+				{Name: "foo", URL: "https://github.com/org/foo"},
+				{Name: "shouldbeignored", URL: "https://github.com/org/shouldbeignored"},
+			},
+			expectedResult: []scm.Repo{
+				{Name: "foo", URL: "https://github.com/org/foo"},
+			},
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpfile, err := createTempFileWithContent("shouldbeignored")
+			if err != nil {
+				t.Fatalf("Failed to create temp file: %v", err)
+			}
+			defer os.Remove(tmpfile.Name())
+
+			os.Setenv("GHORG_IGNORE_PATH", tmpfile.Name())
+
+			got := filterByGhorgignore(tt.cloneTargets)
+			if !reflect.DeepEqual(got, tt.expectedResult) {
+				t.Errorf("filterWithGhorgignore() = %v, want %v", got, tt.expectedResult)
+			}
+		})
+	}
+}
+
+// createTempFileWithContent will create
+func createTempFileWithContent(content string) (*os.File, error) {
+	tmpfile, err := os.CreateTemp("", "ghorgtest")
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := tmpfile.Write([]byte(content)); err != nil {
+		return nil, err
+	}
+
+	if err := tmpfile.Close(); err != nil {
+		return nil, err
+	}
+
+	return tmpfile, nil
+}
+
+func Test_filterDownReposIfTargetReposPathEnabled(t *testing.T) {
+	type testCase struct {
+		name           string
+		cloneTargets   []scm.Repo
+		expectedResult []scm.Repo
+	}
+
+	testCases := []testCase{
+		{
+			name: "filters out repos not matching 'targetRepo'",
+			cloneTargets: []scm.Repo{
+				{Name: "targetRepo", URL: "https://github.com/org/targetRepo"},
+				{Name: "bar", URL: "https://github.com/org/bar"},
+			},
+			expectedResult: []scm.Repo{
+				{Name: "targetRepo", URL: "https://github.com/org/targetRepo"},
+			},
+		},
+		{
+			name: "filters out all repos",
+			cloneTargets: []scm.Repo{
+				{Name: "foo", URL: "https://github.com/org/foo"},
+				{Name: "shouldbefiltered", URL: "https://github.com/org/shouldbefiltered"},
+			},
+			expectedResult: []scm.Repo{},
+		},
+	}
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpfile, err := createTempFileWithContent("targetRepo")
+			if err != nil {
+				t.Fatalf("Failed to create temp file: %v", err)
+			}
+			defer os.Remove(tmpfile.Name())
+
+			os.Setenv("GHORG_TARGET_REPOS_PATH", tmpfile.Name())
+
+			got := filterByTargetReposPath(tt.cloneTargets)
+			if !reflect.DeepEqual(got, tt.expectedResult) {
+				t.Errorf("filterWithGhorgignore() = %v, want %v", got, tt.expectedResult)
+			}
+		})
 	}
 }
